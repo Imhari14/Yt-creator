@@ -20,84 +20,40 @@ st.set_page_config(
 # Custom CSS for better UI
 st.markdown("""
 <style>
-    .stApp {
-        max-width: 1200px;
-        margin: 0 auto;
-    }
-    .video-container {
-        position: relative;
-        padding-bottom: 56.25%; /* 16:9 aspect ratio */
-        height: 0;
-        overflow: hidden;
-        max-width: 100%;
-    }
-    .video-container iframe,
-    .video-container video {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        border-radius: 10px; /* Rounded corners for video */
-    }
-    .stButton > button {
-        background-color: #4CAF50;
+    /* Simple token info container styling - positioned at top */
+    .token-info-container {
+        position: fixed;
+        top: 70px;
+        right: 20px;
+        background-color: #333;
         color: white;
-        font-weight: bold;
-        border: none;
-        padding: 10px 20px;
         border-radius: 5px;
-        width: 100%;
-    }
-    .stButton > button:hover {
-        background-color: #45a049;
-    }
-    .sidebar .stButton > button {
-        background-color: #2196F3;
-    }
-    .sidebar .stButton > button:hover {
-        background-color: #1976D2;
-    }
-    .segment-selector {
-        margin-top: 1rem;
-        padding: 1rem;
-        background-color: #f8f9fa;
-        border-radius: 5px;
-    }
-    /* Flashcard and Quiz Expander Styling */
-    .stExpander {
-        border: 1px solid #ccc;
-        border-radius: 5px;
-        margin-bottom: 10px;
-    }
-    .stExpanderHeader {
-        font-weight: bold;
-        background-color: #f0f2f6;
-        padding: 10px;
-    }
-    .stExpanderContent {
-        padding: 10px;
-    }
-    /* Chat message styling */
-    .user-message {
-        background-color: #dcf8c6;  /* Light green for user messages */
         padding: 8px 12px;
-        border-radius: 10px;
-        margin-bottom: 8px;
-        display: inline-block; /* Allows the bubble to fit content */
-        max-width: 80%; /* Limit width */
-     }
-
-    .assistant-message {
-        background-color: #f0f0f0;  /* Light gray for assistant messages */
-        padding: 8px 12px;
-        border-radius: 10px;
-        margin-bottom: 8px;
+        width: auto;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        z-index: 1000;
+        font-size: 0.8rem;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .token-simple-title {
+        font-weight: bold;
+        margin-bottom: 3px;
+        font-size: 0.85rem;
+    }
+    .token-simple-metric {
         display: inline-block;
-        max-width: 80%;
+        margin-right: 8px;
+        padding: 2px 5px;
+        background-color: #444;
+        border-radius: 3px;
+    }
+    .token-simple-value {
+        font-weight: bold;
+        color: #4CAF50;
     }
 </style>
 """, unsafe_allow_html=True)
+
 
 # Load environment variables
 load_dotenv()
@@ -126,6 +82,21 @@ if 'quiz_score' not in st.session_state:
     st.session_state.quiz_score = 0
 if 'user_answers' not in st.session_state: # User answers
     st.session_state.user_answers = {}
+# Initialize token count tracking
+if 'token_counts' not in st.session_state:
+    st.session_state.token_counts = {
+        'prompt_token_count': 0,
+        'candidates_token_count': 0,
+        'total_token_count': 0,
+        'last_operation': '',
+        'context_window': {
+            'input_limit': 1000000,  # Default for Gemini 1.5 Flash
+            'output_limit': 8000,    # Default for Gemini 1.5 Flash
+        }
+    }
+# Initialize segment interval
+if 'segment_interval' not in st.session_state:
+    st.session_state.segment_interval = 5  # Default 5 minutes (in minutes)
 
 
 def format_timestamp(seconds):
@@ -133,9 +104,9 @@ def format_timestamp(seconds):
     seconds = int(seconds % 60)
     return f"{minutes:02d}:{seconds:02d}"
 
-def get_segment_options(duration):
-    # Create segments of 5 minutes
-    segment_length = 5 * 60  # 5 minutes in seconds
+def get_segment_options(duration, interval_minutes):
+    # Create segments based on user-selected interval
+    segment_length = interval_minutes * 60  # Convert minutes to seconds
     segments = []
     current_time = 0
 
@@ -151,6 +122,64 @@ def get_segment_options(duration):
 
     return segments
 
+def update_token_counts(response):
+    """Update token count information from the Gemini API response - with cumulative tracking"""
+    if hasattr(response, 'usage_metadata'):
+        metadata = response.usage_metadata
+        # Add current usage to cumulative totals
+        st.session_state.token_counts['prompt_token_count'] += metadata.prompt_token_count
+        st.session_state.token_counts['candidates_token_count'] += metadata.candidates_token_count
+        st.session_state.token_counts['total_token_count'] += metadata.total_token_count
+        
+        # Store current operation metrics
+        st.session_state.token_counts['current_operation'] = {
+            'name': st.session_state.token_counts['last_operation'],
+            'prompt_tokens': metadata.prompt_token_count,
+            'output_tokens': metadata.candidates_token_count,
+            'total_tokens': metadata.total_token_count
+        }
+    
+    # Get model info to update context window limits
+    model_info = gemini_handler.get_model_info()
+    if model_info:
+        st.session_state.token_counts['context_window']['input_limit'] = model_info.input_token_limit
+        st.session_state.token_counts['context_window']['output_limit'] = model_info.output_token_limit
+
+# Initialize token count tracking with more detailed metrics
+if 'token_counts' not in st.session_state:
+    st.session_state.token_counts = {
+        'prompt_token_count': 0,
+        'candidates_token_count': 0,
+        'total_token_count': 0,
+        'last_operation': '',
+        'current_operation': {
+            'name': '',
+            'prompt_tokens': 0,
+            'output_tokens': 0,
+            'total_tokens': 0
+        },
+        'context_window': {
+            'input_limit': 1000000,  # Default for Gemini 1.5 Flash
+            'output_limit': 8000,    # Default for Gemini 1.5 Flash
+        }
+    }
+
+
+# Update the token info display function to handle the case where 'current_operation' doesn't exist yet
+def display_token_info():
+    """Display token count information with a simple, clean design at the top"""
+    token_info = st.session_state.token_counts
+    
+    token_info_html = f"""
+    <div class="token-info-container">
+        <div class="token-simple-title">Token Usage</div>
+        <span class="token-simple-metric">Input: <span class="token-simple-value">{token_info['prompt_token_count']:,}</span></span>
+        <span class="token-simple-metric">Output: <span class="token-simple-value">{token_info['candidates_token_count']:,}</span></span>
+        <span class="token-simple-metric">Total: <span class="token-simple-value">{token_info['total_token_count']:,}</span></span>
+    </div>
+    """
+    
+    st.markdown(token_info_html, unsafe_allow_html=True)
 # Sidebar for video URL input and learning tools
 with st.sidebar:
     st.image("https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg")
@@ -159,6 +188,25 @@ with st.sidebar:
     # Video Input Section
     st.header("📹 Video Input")
     video_url = st.text_input("Enter YouTube URL")
+
+    # Segment Interval Selection
+    st.subheader("⏰ Segment Settings")
+    segment_interval = st.slider(
+        "Segment Interval (minutes):",
+        min_value=1,
+        max_value=15,
+        value=st.session_state.segment_interval,
+        step=1
+    )
+    # Update session state if interval changed
+    if segment_interval != st.session_state.segment_interval:
+        st.session_state.segment_interval = segment_interval
+        # Recalculate segments if video is already loaded
+        if st.session_state.video_info:
+            st.session_state.segments = get_segment_options(
+                st.session_state.video_info['duration'],
+                st.session_state.segment_interval
+            )
 
     if st.button("Load Video", use_container_width=True):
         with st.spinner("Processing video..."):
@@ -172,8 +220,11 @@ with st.sidebar:
                 available_transcripts = transcript_handler.get_available_transcripts(video_id)
                 st.session_state.available_transcripts = available_transcripts
 
-                # Create segment options
-                st.session_state.segments = get_segment_options(video_info['duration'])
+                # Create segment options based on user-defined interval
+                st.session_state.segments = get_segment_options(
+                    video_info['duration'],
+                    st.session_state.segment_interval
+                )
 
                 st.success("Video loaded successfully!")
             except Exception as e:
@@ -243,12 +294,17 @@ with st.sidebar:
             if st.button("Generate Flashcards", use_container_width=True):
                 with st.spinner("Generating flashcards..."):
                     try:
-                        flashcards = asyncio.run(gemini_handler.generate_flashcards(
+                        flashcards_response = asyncio.run(gemini_handler.generate_flashcards(
                             st.session_state.transcript,
                             st.session_state.current_frames
                         ))
-                        if flashcards:
+                        
+                        if flashcards_response:
+                            flashcards, response = flashcards_response
                             st.session_state.flashcards = flashcards
+                            # Update token counts
+                            update_token_counts(response)
+                            st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
                             st.success("Flashcards generated!")
                         else:
                             st.warning("Could not generate flashcards. Please try again.")
@@ -258,14 +314,19 @@ with st.sidebar:
             if st.button("Generate Quiz", use_container_width=True):
                 with st.spinner("Generating quiz..."):
                     try:
-                        quiz = asyncio.run(gemini_handler.generate_quiz(
+                        quiz_response = asyncio.run(gemini_handler.generate_quiz(
                             st.session_state.transcript,
                             st.session_state.current_frames
                         ))
-                        if quiz:
+                        
+                        if quiz_response:
+                            quiz, response = quiz_response
                             st.session_state.quiz = quiz
                             st.session_state.quiz_score = 0
                             st.session_state.user_answers = {}  # Reset user answers
+                            # Update token counts
+                            update_token_counts(response)
+                            st.session_state.token_counts['last_operation'] = 'Generate Quiz'
                             st.success("Quiz generated!")
                         else:
                             st.warning("Could not generate quiz. Please try again.")
@@ -359,13 +420,18 @@ if st.session_state.video_info:
 
         with st.spinner("Analyzing video content..."):
             try:
-                response = asyncio.run(gemini_handler.generate_response(
+                response_data = asyncio.run(gemini_handler.generate_response(
                     user_input,
                     st.session_state.current_frames,
                     st.session_state.transcript
                 ))
-                if response:
-                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                
+                if response_data:
+                    response_text, raw_response = response_data
+                    st.session_state.chat_history.append({"role": "assistant", "content": response_text})
+                    # Update token counts
+                    update_token_counts(raw_response)
+                    st.session_state.token_counts['last_operation'] = 'Chat Response'
                 else:
                     st.warning("Could not generate response. Please try again.")
             except Exception as e:
@@ -378,6 +444,9 @@ if st.session_state.video_info:
 
 else:
     st.info("👈 Enter a YouTube URL in the sidebar to get started!")
+
+# Display token info in the corner
+display_token_info()
 
 # Cleanup temporary files when the app is closed
 def cleanup():
