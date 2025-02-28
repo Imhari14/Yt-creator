@@ -41,6 +41,7 @@ class GeminiHandler:
         self.base_delay = 2
         self.last_request_time = 0
         self.min_request_interval = 1.0
+        self.model_info = None  # Store model info for context window limits
 
     def _prepare_frames(self, frames: List[Tuple[np.ndarray, float]] = None) -> List[Tuple[Image.Image, float]]:
         """
@@ -79,10 +80,12 @@ class GeminiHandler:
     async def _generate_with_context(self, prompt: str, frames: List[Tuple[np.ndarray, float]], transcript: str = None):
         """
         Generates content with visual and transcript context.
+        Returns the response text and the raw response object for token counting
         """
         processed_frames = self._prepare_frames(frames)
         if not processed_frames:
-             return await self.chat_with_history(prompt)
+             response = await self.chat_with_history(prompt)
+             return response.text, response
 
         target_time = self._extract_target_time(prompt)
 
@@ -133,12 +136,11 @@ class GeminiHandler:
         try:
             await self._wait_for_rate_limit()
             response = self.vision_model.generate_content(prompt_parts)
-            return response.text
+            return response.text, response  # Return both text and raw response
 
         except Exception as e:
             print(f"Error generating response: {str(e)}")
-            return None # Explicitly Return None
-
+            return None, None  # Return None for both text and raw response
 
 
 
@@ -178,10 +180,14 @@ class GeminiHandler:
         return await self._generate_learning_content(context, frames, transcript, "quiz")
 
     async def _generate_learning_content(self, context: str, frames: List[Tuple[np.ndarray, float]],
-                                      transcript: str, content_type: str) -> List[Dict]:
+                                      transcript: str, content_type: str):
+        """
+        Returns a tuple of (content, response) where content is the formatted data and
+        response is the raw response object for token counting
+        """
         processed_frames = self._prepare_frames(frames) #Simplified
         if not processed_frames:
-            return []
+            return None, None
 
         prompt_parts = [
             f"{context}\n\nTranscript:\n{transcript if transcript else 'No transcript available'}"
@@ -197,19 +203,21 @@ class GeminiHandler:
             end_idx = content.rfind(']') + 1
             if start_idx != -1 and end_idx != 0:
                 json_str = content[start_idx:end_idx]
-                return json.loads(json_str)
+                return json.loads(json_str), response  # Return content and raw response
         except Exception as e:
             print(f"Error generating {content_type}: {str(e)}")
-            return [] #Return empty
+            return None, None  # Return None for both content and raw response
 
     async def generate_response(self, prompt: str, frames: List[Tuple[np.ndarray, float]],
-                             transcript: str = None) -> str:
+                             transcript: str = None):
+        """Returns a tuple of (text_response, raw_response)"""
         response = await self._generate_with_context(prompt, frames, transcript)
-        if not response:
-            return "I apologize, but I couldn't analyze the video segment properly. Please try again or ask a different question."
-        return response
+        if not response or not response[0]:
+            error_message = "I apologize, but I couldn't analyze the video segment properly. Please try again or ask a different question."
+            return error_message, None
+        return response  # Already returns (text, raw_response) tuple
 
-    async def chat_with_history(self, message: str) -> str:
+    async def chat_with_history(self, message: str):
         delay = self.base_delay
         last_exception = None
 
@@ -217,7 +225,7 @@ class GeminiHandler:
             try:
                 await self._wait_for_rate_limit()
                 response = self.chat.send_message(message)
-                return response.text
+                return response
             except Exception as e:
                 last_exception = e
                 if "429" in str(e):  # Check for rate limit error
@@ -257,6 +265,23 @@ class GeminiHandler:
                 elif len(match.groups()) == 2:
                     minutes = float(match.group(1))
                     seconds = float(match.group(2))
+                    minutes = float(match.group(1))
+                    seconds = float(match.group(2))
                     return minutes * 60 + seconds
 
         return None
+        
+    def get_model_info(self):
+        """
+        Get model information including token limits for the context window.
+        Returns model metadata that includes input_token_limit and output_token_limit.
+        """
+        try:
+            if not self.model_info:
+                # Cache model info to avoid repeated API calls
+                self.model_info = genai.get_model("models/gemini-1.5-flash")
+            return self.model_info
+        except Exception as e:
+            print(f"Error getting model info: {str(e)}")
+            # Return default values if API call fails
+            return None
