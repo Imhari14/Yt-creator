@@ -44,7 +44,7 @@ class VideoProcessor:
 
     def extract_frames(self, video_url: str, chunk_start: int = 0, chunk_end: int = 300) -> List[Tuple[np.ndarray, float]]:
         """
-        Extracts frames from video at 1 fps from chunk_start to chunk_end seconds
+        Extracts frames from video at 0.5 fps (every 2 seconds) from chunk_start to chunk_end seconds
         Returns list of tuples containing frame and its timestamp
         """
         frames = []
@@ -53,22 +53,24 @@ class VideoProcessor:
         # Set video position to chunk start
         cap.set(cv2.CAP_PROP_POS_MSEC, chunk_start * 1000)
         
-        while True:
+        # Extract frames at 2-second intervals (0.5 fps)
+        current_time = chunk_start
+        while current_time <= chunk_end:
+            # Set position to current time
+            cap.set(cv2.CAP_PROP_POS_MSEC, current_time * 1000)
+            
             ret, frame = cap.read()
             if not ret:
                 break
                 
-            # Get current timestamp in seconds
-            timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            # Get actual timestamp in seconds
+            actual_timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            frames.append((frame, actual_timestamp))
             
-            if timestamp > chunk_end:
-                break
-                
-            frames.append((frame, timestamp))
-            
-            # Skip to next second
-            cap.set(cv2.CAP_PROP_POS_MSEC, (timestamp + 1) * 1000)
+            # Move to next position (2 seconds later)
+            current_time += 2
         
+        # Release video capture
         cap.release()
         return frames
 
