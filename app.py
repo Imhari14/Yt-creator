@@ -6,8 +6,8 @@ from utils.transcript_handler import TranscriptHandler
 from utils.gemini_handler import GeminiHandler
 import asyncio
 import time
-import random  # <--- IMPORT RANDOM HERE
-
+import random
+import tempfile
 
 # Configure Streamlit page
 st.set_page_config(
@@ -70,8 +70,10 @@ if 'video_info' not in st.session_state:
     st.session_state.video_info = None
 if 'transcript' not in st.session_state:
     st.session_state.transcript = None
+if 'transcript_text' not in st.session_state:
+    st.session_state.transcript_text = None
 if 'current_frames' not in st.session_state:
-    st.session_state.current_frames = None
+    st.session_state.current_frames = []
 if 'current_segment' not in st.session_state:
     st.session_state.current_segment = None
 if 'flashcards' not in st.session_state:
@@ -82,6 +84,10 @@ if 'quiz_score' not in st.session_state:
     st.session_state.quiz_score = 0
 if 'user_answers' not in st.session_state: # User answers
     st.session_state.user_answers = {}
+if 'video_source' not in st.session_state:
+    st.session_state.video_source = None  # "youtube" or "local"
+if 'local_video_path' not in st.session_state:
+    st.session_state.local_video_path = None
 # Initialize token count tracking
 if 'token_counts' not in st.session_state:
     st.session_state.token_counts = {
@@ -97,6 +103,8 @@ if 'token_counts' not in st.session_state:
 # Initialize segment interval
 if 'segment_interval' not in st.session_state:
     st.session_state.segment_interval = 5  # Default 5 minutes (in minutes)
+if 'segments' not in st.session_state:
+    st.session_state.segments = []
 
 
 def format_timestamp(seconds):
@@ -145,25 +153,70 @@ def update_token_counts(response):
         st.session_state.token_counts['context_window']['input_limit'] = model_info.input_token_limit
         st.session_state.token_counts['context_window']['output_limit'] = model_info.output_token_limit
 
-# Initialize token count tracking with more detailed metrics
-if 'token_counts' not in st.session_state:
-    st.session_state.token_counts = {
-        'prompt_token_count': 0,
-        'candidates_token_count': 0,
-        'total_token_count': 0,
-        'last_operation': '',
-        'current_operation': {
-            'name': '',
-            'prompt_tokens': 0,
-            'output_tokens': 0,
-            'total_tokens': 0
-        },
-        'context_window': {
-            'input_limit': 1000000,  # Default for Gemini 1.5 Flash
-            'output_limit': 8000,    # Default for Gemini 1.5 Flash
-        }
-    }
+def parse_transcript_file(file_content):
+    """Parse transcript text file and convert to a format similar to YouTube transcripts"""
+    try:
+        lines = file_content.strip().split("\n")
+        parsed_transcript = []
+        
+        # Simple parsing of text file - assuming each line has content
+        current_time = 0  # Start at 0 seconds
+        for line in lines:
+            # Skip empty lines
+            if not line.strip():
+                continue
+                
+            # Create a transcript entry with estimated timing
+            # Assuming each line takes about 5 seconds (adjustable)
+            duration = 5
+            entry = {
+                'text': line.strip(),
+                'start': current_time,
+                'duration': duration
+            }
+            parsed_transcript.append(entry)
+            current_time += duration
+            
+        return parsed_transcript
+    except Exception as e:
+        st.error(f"Error parsing transcript file: {str(e)}")
+        return []
 
+def get_transcript_text_for_segment(transcript_text, start, end):
+    """Extract transcript text for a specific segment from the full transcript text"""
+    if not transcript_text:
+        return ""
+    
+    # Split transcript into lines for processing
+    lines = transcript_text.strip().split('\n')
+    segment_text = []
+    
+    # Since we don't have timing information in plain text files,
+    # we'll assume even distribution across the video duration
+    if hasattr(st.session_state, 'video_info') and st.session_state.video_info:
+        total_duration = st.session_state.video_info['duration']
+        # Calculate time per line
+        if total_duration > 0 and len(lines) > 0:
+            time_per_line = total_duration / len(lines)
+            
+            # Calculate line indices for the segment
+            start_idx = int(start / time_per_line)
+            end_idx = int(end / time_per_line) + 1
+            
+            # Get lines for the segment
+            segment_lines = lines[start_idx:end_idx]
+            segment_text = " ".join(segment_lines)
+            return segment_text
+    
+    # If we can't calculate properly, return a portion of the transcript
+    if len(lines) > 20:
+        # Return a subset of the transcript if it's very large
+        segment_percentage = (end - start) / st.session_state.video_info['duration']
+        num_lines = max(10, int(len(lines) * segment_percentage))
+        return " ".join(lines[:num_lines])
+    else:
+        # For short transcripts, return everything
+        return transcript_text
 
 # Update the token info display function to handle the case where 'current_operation' doesn't exist yet
 def display_token_info():
@@ -180,6 +233,7 @@ def display_token_info():
     """
     
     st.markdown(token_info_html, unsafe_allow_html=True)
+
 # Sidebar for video URL input and learning tools
 with st.sidebar:
     st.image("https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg")
@@ -187,79 +241,48 @@ with st.sidebar:
 
     # Video Input Section
     st.header("📹 Video Input")
-    video_url = st.text_input("Enter YouTube URL")
-
-    # Segment Interval Selection
-    st.subheader("⏰ Segment Settings")
-    segment_interval = st.slider(
-        "Segment Interval (minutes):",
-        min_value=1,
-        max_value=15,
-        value=st.session_state.segment_interval,
-        step=1
+    
+    # Video source selection - YouTube or Local MP4
+    video_source = st.radio(
+        "Select video source:",
+        options=["YouTube", "Local MP4"],
+        index=0 if st.session_state.video_source == "youtube" or st.session_state.video_source is None else 1
     )
-    # Update session state if interval changed
-    if segment_interval != st.session_state.segment_interval:
-        st.session_state.segment_interval = segment_interval
-        # Recalculate segments if video is already loaded
-        if st.session_state.video_info:
-            st.session_state.segments = get_segment_options(
-                st.session_state.video_info['duration'],
-                st.session_state.segment_interval
-            )
+    
+    if video_source == "YouTube":
+        st.session_state.video_source = "youtube"
+        video_url = st.text_input("Enter YouTube URL")
+        
+        if st.button("Load YouTube Video", use_container_width=True):
+            with st.spinner("Processing YouTube video..."):
+                try:
+                    # Get video info and streaming URL
+                    video_info = video_processor.download_video(video_url)
+                    st.session_state.video_info = video_info
 
-    if st.button("Load Video", use_container_width=True):
-        with st.spinner("Processing video..."):
-            try:
-                # Get video info and streaming URL
-                video_info = video_processor.download_video(video_url)
-                st.session_state.video_info = video_info
+                    # Get available transcripts
+                    video_id = transcript_handler.extract_video_id(video_url)
+                    available_transcripts = transcript_handler.get_available_transcripts(video_id)
+                    st.session_state.available_transcripts = available_transcripts
 
-                # Get available transcripts
-                video_id = transcript_handler.extract_video_id(video_url)
-                available_transcripts = transcript_handler.get_available_transcripts(video_id)
-                st.session_state.available_transcripts = available_transcripts
+                    # Create segment options based on user-defined interval
+                    st.session_state.segments = get_segment_options(
+                        video_info['duration'],
+                        st.session_state.segment_interval
+                    )
+                    
+                    # Clear any previous local video path
+                    st.session_state.local_video_path = None
+                    st.session_state.transcript_text = None
 
-                # Create segment options based on user-defined interval
-                st.session_state.segments = get_segment_options(
-                    video_info['duration'],
-                    st.session_state.segment_interval
-                )
-
-                st.success("Video loaded successfully!")
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-                st.session_state.video_info = None
-
-    # Segment Selection
-    if st.session_state.video_info:
-        st.header("🎯 Video Segment")
-
-        # Segment selector
-        segments = st.session_state.segments
-        segment_labels = [s["label"] for s in segments]
-        selected_segment_idx = st.selectbox(
-            "Select video segment:",
-            range(len(segment_labels)),
-            format_func=lambda x: segment_labels[x]
-        )
-
-        if st.button("Load Segment", use_container_width=True):
-            with st.spinner("Loading segment..."):
-                selected_segment = segments[selected_segment_idx]
-                # Extract frames for selected segment
-                frames = video_processor.extract_frames(
-                    st.session_state.video_info['url'],
-                    selected_segment["start"],
-                    selected_segment["end"]
-                )
-                st.session_state.current_frames = frames
-                st.session_state.current_segment = selected_segment
-                st.success(f"Loaded segment {selected_segment['label']}")
-
-        # Transcript Selection
-        if hasattr(st.session_state, 'available_transcripts') and st.session_state.available_transcripts:
-            st.header("📝 Transcript")
+                    st.success("YouTube video loaded successfully!")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    st.session_state.video_info = None
+        
+        # Transcript Selection for YouTube
+        if st.session_state.video_source == "youtube" and hasattr(st.session_state, 'available_transcripts') and st.session_state.available_transcripts:
+            st.header("📝 YouTube Transcript")
             transcript_options = list(st.session_state.available_transcripts.keys())
             selected_option = st.selectbox(
                 "Select language:",
@@ -286,6 +309,123 @@ with st.sidebar:
                 except Exception as e:
                     st.error("Failed to load transcript")
                     st.session_state.transcript = None
+                    
+    else:  # Local MP4
+        st.session_state.video_source = "local"
+        
+        # Local video file upload
+        uploaded_video = st.file_uploader("Upload MP4 video file", type=["mp4"])
+        
+        # Transcript file upload
+        uploaded_transcript = st.file_uploader("Upload transcript text file", type=["txt"])
+        
+        if uploaded_video is not None and uploaded_transcript is not None:
+            if st.button("Load Local Video", use_container_width=True):
+                with st.spinner("Processing local video..."):
+                    try:
+                        # Save uploaded video to temporary file
+                        temp_dir = tempfile.mkdtemp()
+                        temp_video_path = os.path.join(temp_dir, "uploaded_video.mp4")
+                        
+                        with open(temp_video_path, "wb") as f:
+                            f.write(uploaded_video.getbuffer())
+                        
+                        # Process the video
+                        video_info = video_processor.process_local_video(temp_video_path, uploaded_video.name)
+                        st.session_state.video_info = video_info
+                        st.session_state.local_video_path = temp_video_path
+                        
+                        # Process transcript
+                        transcript_text = uploaded_transcript.getvalue().decode("utf-8")
+                        st.session_state.transcript_text = transcript_text
+                        
+                        # Parse transcript to a format similar to YouTube transcripts
+                        parsed_transcript = parse_transcript_file(transcript_text)
+                        st.session_state.transcript = parsed_transcript
+                        
+                        # Create segment options based on user-defined interval
+                        st.session_state.segments = get_segment_options(
+                            video_info['duration'],
+                            st.session_state.segment_interval
+                        )
+                        
+                        st.success("Local video and transcript loaded successfully!")
+                    except Exception as e:
+                        st.error(f"Error loading local video: {str(e)}")
+                        st.session_state.video_info = None
+                        st.session_state.local_video_path = None
+                        st.session_state.transcript_text = None
+
+    # Segment Interval Selection
+    st.subheader("⏰ Segment Settings")
+    segment_interval = st.slider(
+        "Segment Interval (minutes):",
+        min_value=1,
+        max_value=15,
+        value=st.session_state.segment_interval,
+        step=1
+    )
+        # Update session state if interval changed
+    if segment_interval != st.session_state.segment_interval:
+        st.session_state.segment_interval = segment_interval
+        # Recalculate segments if video is already loaded
+        if st.session_state.video_info:
+            st.session_state.segments = get_segment_options(
+                st.session_state.video_info['duration'],
+                st.session_state.segment_interval
+            )
+
+    # Segment Selection
+    if st.session_state.video_info:
+        st.header("🎯 Video Segment")
+
+        # Segment selector
+        segments = st.session_state.segments
+        segment_labels = [s["label"] for s in segments]
+        selected_segment_idx = st.selectbox(
+            "Select video segment:",
+            range(len(segment_labels)),
+            format_func=lambda x: segment_labels[x]
+        )
+
+        if st.button("Load Segment", use_container_width=True):
+            with st.spinner("Loading segment..."):
+                selected_segment = segments[selected_segment_idx]
+                # Extract frames for selected segment
+                if st.session_state.video_source == "youtube":
+                    frames = video_processor.extract_frames(
+                        st.session_state.video_info['url'],
+                        selected_segment["start"],
+                        selected_segment["end"]
+                    )
+                else:  # local video
+                    frames = video_processor.extract_frames_from_local(
+                        st.session_state.local_video_path,
+                        selected_segment["start"],
+                        selected_segment["end"]
+                    )
+                    
+                st.session_state.current_frames = frames
+                st.session_state.current_segment = selected_segment
+                
+                # Update transcript for this segment
+                if st.session_state.video_source == "youtube" and st.session_state.transcript:
+                    # For YouTube, we already have the transcript with time information
+                    st.session_state.transcript = transcript_handler.get_transcript_for_chunk(
+                        st.session_state.transcript,
+                        selected_segment["start"],
+                        selected_segment["end"]
+                    )
+                elif st.session_state.video_source == "local" and st.session_state.transcript_text:
+                    # For local video, extract portion of transcript based on timing estimation
+                    segment_transcript = get_transcript_text_for_segment(
+                        st.session_state.transcript_text,
+                        selected_segment["start"],
+                        selected_segment["end"]
+                    )
+                    st.session_state.transcript = segment_transcript
+                    
+                st.success(f"Loaded segment {selected_segment['label']}")
 
         # Learning Tools
         if st.session_state.current_frames:
@@ -345,7 +485,13 @@ if st.session_state.video_info:
         segment = st.session_state.current_segment
         st.markdown(f"**Current Segment:** {segment['label']}")
 
-    st.video(st.session_state.video_info["url"])
+    # Display video based on source
+    if st.session_state.video_source == "youtube":
+        st.video(st.session_state.video_info["url"])
+    else:  # local video
+        with open(st.session_state.local_video_path, "rb") as video_file:
+            video_bytes = video_file.read()
+        st.video(video_bytes)
 
     # Learning Materials Section
     col1, col2 = st.columns(2)
@@ -443,7 +589,7 @@ if st.session_state.video_info:
             #st.markdown(f"<div class='{message['role']}-message'>{message['content']}</div>", unsafe_allow_html=True) #Another option
 
 else:
-    st.info("👈 Enter a YouTube URL in the sidebar to get started!")
+    st.info("👈 Enter a YouTube URL or upload a local MP4 file in the sidebar to get started!")
 
 # Display token info in the corner
 display_token_info()

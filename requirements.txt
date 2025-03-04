@@ -1,7 +1,10 @@
-google-generativeai
-yt-dlp
-youtube_transcript_api
-opencv-python
 streamlit
 python-dotenv
-pillow
+yt-dlp
+opencv-python
+numpy
+google-generativeai
+Pillow
+fpdf2
+markdown
+markdownify

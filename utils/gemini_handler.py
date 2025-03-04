@@ -17,26 +17,48 @@ class GeminiHandler:
 
         genai.configure(api_key=api_key)
 
+        # Increase temperature slightly for more detailed and varied outputs
         self.generation_config = {
-            "temperature": 0.7,
-            "top_p": 0.8,
+            "temperature": 0.8,       # Slightly increased from 0.7
+            "top_p": 0.95,            # Increased from 0.8 for more diversity
             "top_k": 40,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 8192, # Maximum token output
+            "stop_sequences": [],
         }
 
+        self.safety_settings = [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            }
+        ]
+
         self.vision_model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",  # CORRECTED MODEL NAME
-            generation_config=self.generation_config
+            model_name="gemini-1.5-flash",
+            generation_config=self.generation_config,
+            safety_settings=self.safety_settings
         )
 
         self.chat_model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",  # CORRECTED MODEL NAME
-            generation_config=self.generation_config
+            model_name="gemini-1.5-flash",
+            generation_config=self.generation_config,
+            safety_settings=self.safety_settings
         )
 
         self.chat = self.chat_model.start_chat(history=[])
         self.max_frames = 8  # Maximum frames per batch
-        # self.max_batches = 4 # Not needed
         self.retry_count = 3
         self.base_delay = 2
         self.last_request_time = 0
@@ -88,8 +110,14 @@ class GeminiHandler:
              return response.text, response
 
         target_time = self._extract_target_time(prompt)
+        
+        # Enhanced prompt to encourage more detailed responses
+        if "explain" in prompt.lower() or "detail" in prompt.lower() or "example" in prompt.lower() or "analogy" in prompt.lower():
+            is_detailed_request = True
+        else:
+            is_detailed_request = False
 
-        # Different prompts based on whether timestamp is requested
+        # Different prompts based on whether timestamp is requested or detailed response is needed
         if target_time is not None:
             context = f"""
             Analyze this specific moment in the video.
@@ -109,6 +137,37 @@ class GeminiHandler:
             - What is being discussed
             - Important elements shown
             """
+        elif is_detailed_request:
+            # Highly detailed prompt for in-depth explanations
+            context = f"""
+            Analyze this video segment thoroughly and provide an exhaustive, expert-level response.
+            
+            Available Information:
+            Visual Content:
+            - Multiple frames showing the video content
+            - Pay attention to important visual details, diagrams, text, and other elements
+            
+            Audio/Transcript:
+            {transcript if transcript else 'No transcript available'}
+            
+            Question: {prompt}
+            
+            Provide a comprehensive, deeply detailed response that:
+            - Explains all relevant concepts with precise technical accuracy
+            - Uses multiple concrete examples to illustrate each key point
+            - Develops elaborate analogies to clarify abstract or complex ideas
+            - Breaks down complex topics into clearly defined components 
+            - Analyzes relationships between concepts with nuanced explanation
+            - Uses the appropriate level of technical language for the content
+            - Thoroughly integrates visual information with conceptual explanations
+            
+            Do not be concerned about response length. Prioritize thoroughness and depth over brevity.
+            Structure your response logically with clear headers and coherent progression of ideas.
+            If multiple interpretations are possible, explore each one in detail.
+            
+            Remember to utilize the full context of both the visual content and transcript to create 
+            the most informative and educational response possible.
+            """
         else:
             context = f"""
             Analyze this video segment by combining both visual content and spoken information.
@@ -123,10 +182,11 @@ class GeminiHandler:
 
             Question: {prompt}
 
-            Provide a natural response that:
+                        Provide a natural response that:
             - Combines what you see and what is being said
             - Focuses on the main points and content
             - Gives a clear understanding of what's happening
+            - Includes examples when helpful for clarity
             Do not mention timestamps unless specifically asked about them.
             """
 
@@ -135,7 +195,11 @@ class GeminiHandler:
 
         try:
             await self._wait_for_rate_limit()
-            response = self.vision_model.generate_content(prompt_parts)
+            # Request streaming to better handle longer responses
+            response = self.vision_model.generate_content(
+                prompt_parts,
+                stream=False  # Set to True for streaming if implementing streaming UI
+            )
             return response.text, response  # Return both text and raw response
 
         except Exception as e:
@@ -154,10 +218,12 @@ class GeminiHandler:
         1. Cover key concepts shown and discussed
         2. Include both visual and spoken information
         3. Focus on important points and details
+        4. Be detailed enough for effective learning but concise enough for revision
 
         Format as JSON array of objects with 'question' and 'answer' fields.
         Generate 5-8 high-quality flashcards.
         Do not include timestamps in the cards.
+        The answers should be comprehensive and detailed enough to fully explain the concept.
         """
 
         return await self._generate_learning_content(context, frames, transcript, "flashcards")
@@ -171,6 +237,8 @@ class GeminiHandler:
         1. Test understanding of key concepts shown and discussed
         2. Include both visual and spoken information
         3. Be clear and comprehensive
+        4. Have carefully crafted distractors that are plausible but clearly incorrect
+        5. Cover various levels of understanding from recall to application
 
         Format as JSON array of objects with 'question', 'options', and 'correct_answer' fields.
         Generate 5 challenging but fair questions.
@@ -180,7 +248,7 @@ class GeminiHandler:
         return await self._generate_learning_content(context, frames, transcript, "quiz")
 
     async def _generate_learning_content(self, context: str, frames: List[Tuple[np.ndarray, float]],
-                                      transcript: str, content_type: str):
+                                       transcript: str, content_type: str):
         """
         Returns a tuple of (content, response) where content is the formatted data and
         response is the raw response object for token counting
@@ -204,12 +272,23 @@ class GeminiHandler:
             if start_idx != -1 and end_idx != 0:
                 json_str = content[start_idx:end_idx]
                 return json.loads(json_str), response  # Return content and raw response
+            else:
+                # Try to extract JSON even if not perfectly formatted
+                import re
+                json_pattern = r'\[\s*\{.*\}\s*\]'
+                match = re.search(json_pattern, content, re.DOTALL)
+                if match:
+                    json_str = match.group(0)
+                    return json.loads(json_str), response
+                else:
+                    print(f"Could not extract JSON from response: {content[:100]}...")
+                    return None, response
         except Exception as e:
             print(f"Error generating {content_type}: {str(e)}")
             return None, None  # Return None for both content and raw response
 
     async def generate_response(self, prompt: str, frames: List[Tuple[np.ndarray, float]],
-                             transcript: str = None):
+                              transcript: str = None):
         """Returns a tuple of (text_response, raw_response)"""
         response = await self._generate_with_context(prompt, frames, transcript)
         if not response or not response[0]:
@@ -224,7 +303,13 @@ class GeminiHandler:
         for _ in range(self.retry_count):
             try:
                 await self._wait_for_rate_limit()
-                response = self.chat.send_message(message)
+                # Emphasize the need for detailed responses when appropriate
+                if "explain" in message.lower() or "detail" in message.lower() or "example" in message.lower():
+                    enhanced_message = f"{message}\n\nPlease provide a detailed explanation with examples and analogies when appropriate. Don't worry about response length - focus on being comprehensive and thorough."
+                else:
+                    enhanced_message = message
+                    
+                response = self.chat.send_message(enhanced_message)
                 return response
             except Exception as e:
                 last_exception = e
@@ -263,8 +348,6 @@ class GeminiHandler:
                 elif len(match.groups()) == 1:
                     return float(match.group(1)) * 60
                 elif len(match.groups()) == 2:
-                    minutes = float(match.group(1))
-                    seconds = float(match.group(2))
                     minutes = float(match.group(1))
                     seconds = float(match.group(2))
                     return minutes * 60 + seconds

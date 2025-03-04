@@ -1,5 +1,5 @@
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import re
 
 class TranscriptHandler:
@@ -110,13 +110,68 @@ class TranscriptHandler:
             print(f"Error getting transcript: {str(e)}")
             return None
 
-    def get_transcript_for_chunk(self, transcript: List[Dict], start: int, end: int) -> str:
+    def parse_transcript_text(self, transcript_text: str, video_duration: float) -> List[Dict]:
+        """
+        Parse a plain text transcript into a format similar to YouTube transcripts
+        Estimates timing based on text length and video duration
+        
+        Args:
+            transcript_text: The plain text transcript
+            video_duration: Total duration of the video in seconds
+            
+        Returns:
+            List of dictionaries with 'text', 'start' and 'duration' keys
+        """
+        try:
+            # Split text into lines (paragraphs)
+            lines = [line for line in transcript_text.strip().split("\n") if line.strip()]
+            if not lines:
+                return []
+                
+            # Simple timing estimation
+            # Calculate total text length to distribute timing proportionally
+            total_length = sum(len(line) for line in lines)
+            
+            # Create transcript entries with estimated timing
+            entries = []
+            current_start = 0
+            
+            for line in lines:
+                if not line.strip():
+                    continue
+                    
+                # Estimate duration based on text length relative to total
+                line_portion = len(line) / total_length if total_length > 0 else 0
+                estimated_duration = line_portion * video_duration
+                
+                entry = {
+                    'text': line.strip(),
+                    'start': current_start,
+                    'duration': estimated_duration
+                }
+                entries.append(entry)
+                
+                # Move start time for next entry
+                current_start += estimated_duration
+                
+            return entries
+            
+        except Exception as e:
+            print(f"Error parsing transcript text: {str(e)}")
+            return []
+
+    def get_transcript_for_chunk(self, transcript: Union[List[Dict], str], start: int, end: int) -> str:
         """
         Gets transcript text for specified time chunk
+        Works with both YouTube transcript format and plain text
         """
         if not transcript:
             return ""
-
+            
+        # If transcript is already a string (from local file), handle differently
+        if isinstance(transcript, str):
+            return transcript
+            
         chunk_transcript = []
         for entry in transcript:
             if start <= entry['start'] <= end:
