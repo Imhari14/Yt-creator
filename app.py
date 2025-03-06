@@ -17,10 +17,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Load environment variables
+load_dotenv()
+
+# Initialize handlers in session state for persistence
+if 'handlers' not in st.session_state:
+    st.session_state.handlers = {
+        'video_processor': VideoProcessor(),
+        'transcript_handler': TranscriptHandler(),
+        'gemini_handler': GeminiHandler()
+    }
+
+# Use handlers from session state
+video_processor = st.session_state.handlers['video_processor']
+transcript_handler = st.session_state.handlers['transcript_handler']
+gemini_handler = st.session_state.handlers['gemini_handler']
+
+# Re-initialize gemini_handler if last segment changed
+if ('last_segment' not in st.session_state or 
+    st.session_state.get('current_segment') != st.session_state.get('last_segment')):
+    st.session_state.handlers['gemini_handler'] = GeminiHandler()
+    gemini_handler = st.session_state.handlers['gemini_handler']
+    if st.session_state.get('current_segment'):
+        st.session_state.last_segment = st.session_state.current_segment
+
 # Custom CSS for better UI
 st.markdown("""
 <style>
-    /* Simple token info container styling - positioned at top */
     .token-info-container {
         position: fixed;
         top: 70px;
@@ -54,15 +77,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
-# Load environment variables
-load_dotenv()
-
-# Initialize handlers
-video_processor = VideoProcessor()
-transcript_handler = TranscriptHandler()
-gemini_handler = GeminiHandler()
-
 # Initialize session state
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
@@ -82,30 +96,37 @@ if 'quiz' not in st.session_state:
     st.session_state.quiz = None
 if 'quiz_score' not in st.session_state:
     st.session_state.quiz_score = 0
-if 'user_answers' not in st.session_state: # User answers
+if 'user_answers' not in st.session_state:
     st.session_state.user_answers = {}
 if 'video_source' not in st.session_state:
-    st.session_state.video_source = None  # "youtube" or "local"
+    st.session_state.video_source = None
 if 'local_video_path' not in st.session_state:
     st.session_state.local_video_path = None
-# Initialize token count tracking
 if 'token_counts' not in st.session_state:
     st.session_state.token_counts = {
         'prompt_token_count': 0,
         'candidates_token_count': 0,
         'total_token_count': 0,
         'last_operation': '',
+        'initial_context': {
+            'prompt_tokens': 0,
+            'output_tokens': 0,
+            'total_tokens': 0
+        },
+        'query_tokens': {
+            'prompt_tokens': 0,
+            'output_tokens': 0,
+            'total_tokens': 0
+        },
         'context_window': {
-            'input_limit': 1000000,  # Default for Gemini 1.5 Flash
-            'output_limit': 8000,    # Default for Gemini 1.5 Flash
+            'input_limit': 1000000,  # Default for Gemini 2.0 Flash
+            'output_limit': 16000,    # Default for Gemini 2.0 Flash
         }
     }
-# Initialize segment interval
 if 'segment_interval' not in st.session_state:
     st.session_state.segment_interval = 5  # Default 5 minutes (in minutes)
 if 'segments' not in st.session_state:
     st.session_state.segments = []
-
 
 def format_timestamp(seconds):
     minutes = int(seconds // 60)
@@ -113,11 +134,9 @@ def format_timestamp(seconds):
     return f"{minutes:02d}:{seconds:02d}"
 
 def get_segment_options(duration, interval_minutes):
-    # Create segments based on user-selected interval
-    segment_length = interval_minutes * 60  # Convert minutes to seconds
+    segment_length = interval_minutes * 60
     segments = []
     current_time = 0
-
     while current_time < duration:
         end_time = min(current_time + segment_length, duration)
         segment_label = f"{format_timestamp(current_time)} - {format_timestamp(end_time)}"
@@ -127,17 +146,60 @@ def get_segment_options(duration, interval_minutes):
             "end": end_time
         })
         current_time = end_time
-
     return segments
 
 def update_token_counts(response):
-    """Update token count information from the Gemini API response - with cumulative tracking"""
+    """Update token count information from the Gemini API response with separate tracking"""
     if hasattr(response, 'usage_metadata'):
         metadata = response.usage_metadata
-        # Add current usage to cumulative totals
-        st.session_state.token_counts['prompt_token_count'] += metadata.prompt_token_count
-        st.session_state.token_counts['candidates_token_count'] += metadata.candidates_token_count
-        st.session_state.token_counts['total_token_count'] += metadata.total_token_count
+        
+        # Initialize token tracking if not exists
+        if 'initial_context' not in st.session_state.token_counts:
+            st.session_state.token_counts['initial_context'] = {
+                'prompt_tokens': 0,
+                'output_tokens': 0,
+                'total_tokens': 0
+            }
+        if 'query_tokens' not in st.session_state.token_counts:
+            st.session_state.token_counts['query_tokens'] = {
+                'prompt_tokens': 0,
+                'output_tokens': 0,
+                'total_tokens': 0
+            }
+
+        # Track tokens based on operation type
+        if st.session_state.token_counts['last_operation'] == 'Initialize Context':
+            # Store initial context tokens
+            st.session_state.token_counts['initial_context'] = {
+                'prompt_tokens': metadata.prompt_token_count,
+                'output_tokens': metadata.candidates_token_count,
+                'total_tokens': metadata.total_token_count
+            }
+            # Reset query tokens when context changes
+            st.session_state.token_counts['query_tokens'] = {
+                'prompt_tokens': 0,
+                'output_tokens': 0,
+                'total_tokens': 0
+            }
+        else:
+            # Add only new query tokens (excluding context)
+            st.session_state.token_counts['query_tokens']['prompt_tokens'] += metadata.prompt_token_count
+            st.session_state.token_counts['query_tokens']['output_tokens'] += metadata.candidates_token_count
+            st.session_state.token_counts['query_tokens']['total_tokens'] += metadata.total_token_count
+
+        # Update cumulative totals
+        st.session_state.token_counts['prompt_token_count'] = (
+            st.session_state.token_counts['initial_context']['prompt_tokens'] +
+            st.session_state.token_counts['query_tokens']['prompt_tokens']
+        )
+        st.session_state.token_counts['candidates_token_count'] = (
+            st.session_state.token_counts['initial_context']['output_tokens'] +
+            st.session_state.token_counts['query_tokens']['output_tokens']
+        )
+        st.session_state.token_counts['total_token_count'] = (
+            st.session_state.token_counts['initial_context']['total_tokens'] +
+            st.session_state.token_counts['query_tokens']['total_tokens']
+        )
         
         # Store current operation metrics
         st.session_state.token_counts['current_operation'] = {
@@ -147,27 +209,20 @@ def update_token_counts(response):
             'total_tokens': metadata.total_token_count
         }
     
-    # Get model info to update context window limits
+    # Update context window limits
     model_info = gemini_handler.get_model_info()
     if model_info:
         st.session_state.token_counts['context_window']['input_limit'] = model_info.input_token_limit
         st.session_state.token_counts['context_window']['output_limit'] = model_info.output_token_limit
 
 def parse_transcript_file(file_content):
-    """Parse transcript text file and convert to a format similar to YouTube transcripts"""
     try:
         lines = file_content.strip().split("\n")
         parsed_transcript = []
-        
-        # Simple parsing of text file - assuming each line has content
-        current_time = 0  # Start at 0 seconds
+        current_time = 0
         for line in lines:
-            # Skip empty lines
             if not line.strip():
                 continue
-                
-            # Create a transcript entry with estimated timing
-            # Assuming each line takes about 5 seconds (adjustable)
             duration = 5
             entry = {
                 'text': line.strip(),
@@ -176,62 +231,40 @@ def parse_transcript_file(file_content):
             }
             parsed_transcript.append(entry)
             current_time += duration
-            
         return parsed_transcript
     except Exception as e:
         st.error(f"Error parsing transcript file: {str(e)}")
         return []
 
 def get_transcript_text_for_segment(transcript_text, start, end):
-    """Extract transcript text for a specific segment from the full transcript text"""
     if not transcript_text:
         return ""
-    
-    # Split transcript into lines for processing
     lines = transcript_text.strip().split('\n')
-    segment_text = []
-    
-    # Since we don't have timing information in plain text files,
-    # we'll assume even distribution across the video duration
     if hasattr(st.session_state, 'video_info') and st.session_state.video_info:
         total_duration = st.session_state.video_info['duration']
-        # Calculate time per line
         if total_duration > 0 and len(lines) > 0:
             time_per_line = total_duration / len(lines)
-            
-            # Calculate line indices for the segment
             start_idx = int(start / time_per_line)
             end_idx = int(end / time_per_line) + 1
-            
-            # Get lines for the segment
             segment_lines = lines[start_idx:end_idx]
-            segment_text = " ".join(segment_lines)
-            return segment_text
-    
-    # If we can't calculate properly, return a portion of the transcript
+            return " ".join(segment_lines)
     if len(lines) > 20:
-        # Return a subset of the transcript if it's very large
         segment_percentage = (end - start) / st.session_state.video_info['duration']
         num_lines = max(10, int(len(lines) * segment_percentage))
         return " ".join(lines[:num_lines])
-    else:
-        # For short transcripts, return everything
-        return transcript_text
+    return transcript_text
 
-# Update the token info display function to handle the case where 'current_operation' doesn't exist yet
 def display_token_info():
-    """Display token count information with a simple, clean design at the top"""
+    """Display detailed token count information"""
     token_info = st.session_state.token_counts
-    
     token_info_html = f"""
     <div class="token-info-container">
         <div class="token-simple-title">Token Usage</div>
-        <span class="token-simple-metric">Input: <span class="token-simple-value">{token_info['prompt_token_count']:,}</span></span>
-        <span class="token-simple-metric">Output: <span class="token-simple-value">{token_info['candidates_token_count']:,}</span></span>
+        <span class="token-simple-metric">Context: <span class="token-simple-value">{token_info['initial_context'].get('total_tokens', 0):,}</span></span>
+        <span class="token-simple-metric">Queries: <span class="token-simple-value">{token_info['query_tokens'].get('total_tokens', 0):,}</span></span>
         <span class="token-simple-metric">Total: <span class="token-simple-value">{token_info['total_token_count']:,}</span></span>
     </div>
     """
-    
     st.markdown(token_info_html, unsafe_allow_html=True)
 
 # Sidebar for video URL input and learning tools
@@ -241,14 +274,12 @@ with st.sidebar:
 
     # Video Input Section
     st.header("📹 Video Input")
-    
-    # Video source selection - YouTube or Local MP4
     video_source = st.radio(
         "Select video source:",
         options=["YouTube", "Local MP4"],
         index=0 if st.session_state.video_source == "youtube" or st.session_state.video_source is None else 1
     )
-    
+
     if video_source == "YouTube":
         st.session_state.video_source = "youtube"
         video_url = st.text_input("Enter YouTube URL")
@@ -256,22 +287,18 @@ with st.sidebar:
         if st.button("Load YouTube Video", use_container_width=True):
             with st.spinner("Processing YouTube video..."):
                 try:
-                    # Get video info and streaming URL
                     video_info = video_processor.download_video(video_url)
                     st.session_state.video_info = video_info
 
-                    # Get available transcripts
                     video_id = transcript_handler.extract_video_id(video_url)
                     available_transcripts = transcript_handler.get_available_transcripts(video_id)
                     st.session_state.available_transcripts = available_transcripts
 
-                    # Create segment options based on user-defined interval
                     st.session_state.segments = get_segment_options(
                         video_info['duration'],
                         st.session_state.segment_interval
                     )
                     
-                    # Clear any previous local video path
                     st.session_state.local_video_path = None
                     st.session_state.transcript_text = None
 
@@ -280,7 +307,7 @@ with st.sidebar:
                     st.error(f"Error: {str(e)}")
                     st.session_state.video_info = None
         
-        # Transcript Selection for YouTube
+        # YouTube Transcript Selection
         if st.session_state.video_source == "youtube" and hasattr(st.session_state, 'available_transcripts') and st.session_state.available_transcripts:
             st.header("📝 YouTube Transcript")
             transcript_options = list(st.session_state.available_transcripts.keys())
@@ -295,7 +322,6 @@ with st.sidebar:
                     video_id = transcript_handler.extract_video_id(video_url)
                     full_transcript = transcript_handler.get_transcript(video_id, [lang_code])
 
-                    # Filter transcript for current segment if one is selected
                     if st.session_state.current_segment:
                         segment = st.session_state.current_segment
                         st.session_state.transcript = transcript_handler.get_transcript_for_chunk(
@@ -312,38 +338,29 @@ with st.sidebar:
                     
     else:  # Local MP4
         st.session_state.video_source = "local"
-        
-        # Local video file upload
         uploaded_video = st.file_uploader("Upload MP4 video file", type=["mp4"])
-        
-        # Transcript file upload
         uploaded_transcript = st.file_uploader("Upload transcript text file", type=["txt"])
         
         if uploaded_video is not None and uploaded_transcript is not None:
             if st.button("Load Local Video", use_container_width=True):
                 with st.spinner("Processing local video..."):
                     try:
-                        # Save uploaded video to temporary file
                         temp_dir = tempfile.mkdtemp()
                         temp_video_path = os.path.join(temp_dir, "uploaded_video.mp4")
                         
                         with open(temp_video_path, "wb") as f:
                             f.write(uploaded_video.getbuffer())
                         
-                        # Process the video
                         video_info = video_processor.process_local_video(temp_video_path, uploaded_video.name)
                         st.session_state.video_info = video_info
                         st.session_state.local_video_path = temp_video_path
                         
-                        # Process transcript
                         transcript_text = uploaded_transcript.getvalue().decode("utf-8")
                         st.session_state.transcript_text = transcript_text
                         
-                        # Parse transcript to a format similar to YouTube transcripts
                         parsed_transcript = parse_transcript_file(transcript_text)
                         st.session_state.transcript = parsed_transcript
                         
-                        # Create segment options based on user-defined interval
                         st.session_state.segments = get_segment_options(
                             video_info['duration'],
                             st.session_state.segment_interval
@@ -356,7 +373,7 @@ with st.sidebar:
                         st.session_state.local_video_path = None
                         st.session_state.transcript_text = None
 
-    # Segment Interval Selection
+    # Segment Settings
     st.subheader("⏰ Segment Settings")
     segment_interval = st.slider(
         "Segment Interval (minutes):",
@@ -365,21 +382,17 @@ with st.sidebar:
         value=st.session_state.segment_interval,
         step=1
     )
-        # Update session state if interval changed
     if segment_interval != st.session_state.segment_interval:
         st.session_state.segment_interval = segment_interval
-        # Recalculate segments if video is already loaded
         if st.session_state.video_info:
             st.session_state.segments = get_segment_options(
                 st.session_state.video_info['duration'],
                 st.session_state.segment_interval
             )
-
+    
     # Segment Selection
     if st.session_state.video_info:
         st.header("🎯 Video Segment")
-
-        # Segment selector
         segments = st.session_state.segments
         segment_labels = [s["label"] for s in segments]
         selected_segment_idx = st.selectbox(
@@ -391,7 +404,6 @@ with st.sidebar:
         if st.button("Load Segment", use_container_width=True):
             with st.spinner("Loading segment..."):
                 selected_segment = segments[selected_segment_idx]
-                # Extract frames for selected segment
                 if st.session_state.video_source == "youtube":
                     frames = video_processor.extract_frames(
                         st.session_state.video_info['url'],
@@ -408,16 +420,13 @@ with st.sidebar:
                 st.session_state.current_frames = frames
                 st.session_state.current_segment = selected_segment
                 
-                # Update transcript for this segment
                 if st.session_state.video_source == "youtube" and st.session_state.transcript:
-                    # For YouTube, we already have the transcript with time information
                     st.session_state.transcript = transcript_handler.get_transcript_for_chunk(
                         st.session_state.transcript,
                         selected_segment["start"],
                         selected_segment["end"]
                     )
                 elif st.session_state.video_source == "local" and st.session_state.transcript_text:
-                    # For local video, extract portion of transcript based on timing estimation
                     segment_transcript = get_transcript_text_for_segment(
                         st.session_state.transcript_text,
                         selected_segment["start"],
@@ -442,7 +451,6 @@ with st.sidebar:
                         if flashcards_response:
                             flashcards, response = flashcards_response
                             st.session_state.flashcards = flashcards
-                            # Update token counts
                             update_token_counts(response)
                             st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
                             st.success("Flashcards generated!")
@@ -464,7 +472,6 @@ with st.sidebar:
                             st.session_state.quiz = quiz
                             st.session_state.quiz_score = 0
                             st.session_state.user_answers = {}  # Reset user answers
-                            # Update token counts
                             update_token_counts(response)
                             st.session_state.token_counts['last_operation'] = 'Generate Quiz'
                             st.success("Quiz generated!")
@@ -475,17 +482,14 @@ with st.sidebar:
 
 # Main content area
 if st.session_state.video_info:
-    # Video Player Section
     st.header("📺 Video Player")
     video_title = st.session_state.video_info['title']
     st.markdown(f"### {video_title}")
 
-    # Show current segment info if selected
     if st.session_state.current_segment:
         segment = st.session_state.current_segment
         st.markdown(f"**Current Segment:** {segment['label']}")
 
-    # Display video based on source
     if st.session_state.video_source == "youtube":
         st.video(st.session_state.video_info["url"])
     else:  # local video
@@ -502,7 +506,7 @@ if st.session_state.video_info:
         if st.session_state.flashcards:
             for i, card in enumerate(st.session_state.flashcards):
                 with st.expander(f"Card {i+1}: {card['question'][:50]}...", expanded=False):
-                    st.write("**Question:**", card['question'])  # Display the full question
+                    st.write("**Question:**", card['question'])
                     st.write("**Answer:**", card['answer'])
         else:
             st.info("Select a segment and generate flashcards to study!")
@@ -513,7 +517,6 @@ if st.session_state.video_info:
         if st.session_state.quiz:
             for i, question in enumerate(st.session_state.quiz):
                 st.subheader(f"Q{i+1}: {question['question']}")
-                # Randomize option order
                 options = question['options']
                 random.shuffle(options)
                 user_answer = st.radio(
@@ -528,12 +531,11 @@ if st.session_state.video_info:
                         st.success("Correct! ✅")
                     else:
                         st.error(f"Incorrect. The correct answer is: {question['correct_answer']}")
-            #Show results
+
             if len(st.session_state.user_answers) == len(st.session_state.quiz):
                 correct_count = sum(st.session_state.user_answers.get(i) == q['correct_answer'] for i, q in enumerate(st.session_state.quiz))
                 st.metric("Quiz Score", f"{correct_count}/{len(st.session_state.quiz)}")
 
-                # Review Section
                 with st.expander("Review Answers"):
                     for i, question in enumerate(st.session_state.quiz):
                         user_answer = st.session_state.user_answers.get(i, "Not Answered")
@@ -541,10 +543,9 @@ if st.session_state.video_info:
                         is_correct = user_answer == correct_answer
 
                         st.write(f"**Q{i+1}: {question['question']}**")
-                        st.write(f"Your answer: {user_answer}", help= "Correct" if is_correct else "Incorrect")
+                        st.write(f"Your answer: {user_answer}", help="Correct" if is_correct else "Incorrect")
                         if not is_correct:
-                             st.write(f"Correct answer: {correct_answer}")
-
+                            st.write(f"Correct answer: {correct_answer}")
         else:
             st.info("Select a segment and generate a quiz to test your knowledge!")
 
@@ -575,7 +576,6 @@ if st.session_state.video_info:
                 if response_data:
                     response_text, raw_response = response_data
                     st.session_state.chat_history.append({"role": "assistant", "content": response_text})
-                    # Update token counts
                     update_token_counts(raw_response)
                     st.session_state.token_counts['last_operation'] = 'Chat Response'
                 else:
@@ -586,7 +586,6 @@ if st.session_state.video_info:
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.write(message["content"])
-            #st.markdown(f"<div class='{message['role']}-message'>{message['content']}</div>", unsafe_allow_html=True) #Another option
 
 else:
     st.info("👈 Enter a YouTube URL or upload a local MP4 file in the sidebar to get started!")

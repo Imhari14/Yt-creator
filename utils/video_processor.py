@@ -84,7 +84,7 @@ class VideoProcessor:
 
     def extract_frames(self, video_url: str, chunk_start: int = 0, chunk_end: int = 300) -> List[Tuple[np.ndarray, float]]:
         """
-        Extracts frames from video at 0.5 fps (every 2 seconds) from chunk_start to chunk_end seconds
+        Extracts frames from video at 0.5 fps (every 2 seconds)
         Returns list of tuples containing frame and its timestamp
         Works with both YouTube URLs and local file paths
         """
@@ -103,7 +103,7 @@ class VideoProcessor:
             ret, frame = cap.read()
             if not ret:
                 break
-                
+            
             # Get actual timestamp in seconds
             actual_timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
             frames.append((frame, actual_timestamp))
@@ -113,6 +113,7 @@ class VideoProcessor:
         
         # Release video capture
         cap.release()
+        print(f"Extracted {len(frames)} frames from video segment ({chunk_start}s to {chunk_end}s)")
         return frames
 
     def extract_frames_from_local(self, video_path: str, chunk_start: int = 0, chunk_end: int = 300) -> List[Tuple[np.ndarray, float]]:
