@@ -6,6 +6,9 @@ from utils.transcript_handler import TranscriptHandler
 from utils.gemini_handler import GeminiHandler
 import asyncio
 import time
+import base64
+from PIL import Image
+import io
 import random
 import tempfile
 
@@ -378,7 +381,7 @@ with st.sidebar:
     segment_interval = st.slider(
         "Segment Interval (minutes):",
         min_value=1,
-        max_value=15,
+        max_value=25,
         value=st.session_state.segment_interval,
         step=1
     )
@@ -556,26 +559,106 @@ if st.session_state.video_info:
     else:
         placeholder_text = "Please select a video segment first..."
 
-    user_input = st.chat_input(placeholder_text)
+    # Create columns for the chat input area
+    input_col1, input_col2 = st.columns([4, 1])
 
-    if user_input:
+    with input_col1:
+        user_input = st.text_area("Your message:", key="chat_input", height=100)
+
+    with input_col2:
+        uploaded_image = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'], key="chat_image")
+        uploaded_file = st.file_uploader("Upload File", type=['pdf', 'txt', 'doc', 'docx'], key="chat_file")
+
+    # Add a submit button
+    if st.button("Send", use_container_width=True):
         if not st.session_state.current_segment:
             st.warning("Please select a video segment first!")
             st.stop()
 
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        if not user_input and not uploaded_image and not uploaded_file:
+            st.warning("Please enter a message or upload a file!")
+            st.stop()
 
-        with st.spinner("Analyzing video content..."):
+        # Prepare the message content
+        message_content = {
+            "text": user_input,
+            "image": None,
+            "file": None
+        }
+
+        # Handle image upload
+        if uploaded_image:
             try:
+                # Read and process the image
+                image = Image.open(uploaded_image)
+                # Convert to RGB if necessary
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                # Resize if too large (e.g., max 800px width)
+                max_width = 800
+                if image.width > max_width:
+                    ratio = max_width / image.width
+                    new_size = (max_width, int(image.height * ratio))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+                # Convert to base64 for storage
+                buffered = io.BytesIO()
+                image.save(buffered, format="JPEG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+                message_content["image"] = img_str
+            except Exception as e:
+                st.error(f"Error processing image: {str(e)}")
+                st.stop()
+
+        # Handle file upload
+        if uploaded_file:
+            try:
+                # Read and store file content
+                file_content = uploaded_file.read()
+                if uploaded_file.type.startswith('text/'):
+                    # For text files, store the content as string
+                    file_content = file_content.decode('utf-8')
+                else:
+                    # For binary files, store as base64
+                    file_content = base64.b64encode(file_content).decode()
+                message_content["file"] = {
+                    "name": uploaded_file.name,
+                    "type": uploaded_file.type,
+                    "content": file_content
+                }
+            except Exception as e:
+                st.error(f"Error processing file: {str(e)}")
+                st.stop()
+
+        # Add message to chat history
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": message_content
+        })
+
+        with st.spinner("Analyzing content..."):
+            try:
+                # Prepare the context with additional content
+                context = {
+                    "frames": st.session_state.current_frames,
+                    "transcript": st.session_state.transcript,
+                    "uploaded_image": message_content["image"],
+                    "uploaded_file": message_content["file"]
+                }
+
                 response_data = asyncio.run(gemini_handler.generate_response(
                     user_input,
-                    st.session_state.current_frames,
-                    st.session_state.transcript
+                    context["frames"],
+                    context["transcript"],
+                    uploaded_image=context["uploaded_image"],
+                    uploaded_file=context["uploaded_file"]
                 ))
                 
                 if response_data:
                     response_text, raw_response = response_data
-                    st.session_state.chat_history.append({"role": "assistant", "content": response_text})
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "content": {"text": response_text}
+                    })
                     update_token_counts(raw_response)
                     st.session_state.token_counts['last_operation'] = 'Chat Response'
                 else:
@@ -583,12 +666,33 @@ if st.session_state.video_info:
             except Exception as e:
                 st.error(f"Error generating response: {str(e)}")
 
+    # Display chat history with support for images and files
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
-            st.write(message["content"])
+            if isinstance(message["content"], dict):
+                # Display text content
+                if "text" in message["content"] and message["content"]["text"]:
+                    st.write(message["content"]["text"])
 
-else:
-    st.info("👈 Enter a YouTube URL or upload a local MP4 file in the sidebar to get started!")
+                # Display image if present
+                if "image" in message["content"] and message["content"]["image"]:
+                    try:
+                        image_bytes = base64.b64decode(message["content"]["image"])
+                        st.image(image_bytes, caption="Uploaded Image", use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error displaying image: {str(e)}")
+
+                # Display file if present
+                if "file" in message["content"] and message["content"]["file"]:
+                    file_info = message["content"]["file"]
+                    if file_info["type"].startswith('text/'):
+                        with st.expander(f"📎 {file_info['name']}"):
+                            st.text(file_info["content"])
+                    else:
+                        st.write(f"📎 Uploaded file: {file_info['name']}")
+            else:
+                # Handle legacy message format
+                st.write(message["content"])
 
 # Display token info in the corner
 display_token_info()
