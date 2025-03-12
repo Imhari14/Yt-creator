@@ -10,6 +10,8 @@ import asyncio
 import json
 import math
 import hashlib
+import base64
+import io
 import streamlit as st
 
 class GeminiHandler:
@@ -68,7 +70,7 @@ class GeminiHandler:
         
         # Configuration
         self.max_frames = 3000
-        self.target_frames = 200
+        self.target_frames = 200  # Keep original value that works reliably with Gemini's payload limits
         self.frame_batch_size = 50
         self.retry_count = 3
         self.base_delay = 2
@@ -164,11 +166,19 @@ class GeminiHandler:
             self.processed_frames = self._prepare_frames(frames)
             print("Frame processing complete")
 
-        # Prepare initial context
-        context = """
-        I am analyzing this video segment. I have access to:
-        1. Multiple frames from the segment (sampled adaptively)
+        # Get segment time range
+        start_time = self.processed_frames[0][1] if self.processed_frames else 0
+        end_time = self.processed_frames[-1][1] if self.processed_frames else 0
+        time_range = f"{start_time:.1f}s to {end_time:.1f}s"
+
+        # Prepare initial context with timeline info
+        context = f"""
+        I am analyzing this video segment from {time_range}. I have access to:
+        1. Multiple frames from the segment with timestamps ({len(self.processed_frames)} frames)
         2. The transcript of the spoken content
+
+        The video segment spans from {start_time:.1f} seconds to {end_time:.1f} seconds.
+        When asked about specific timestamps, I will refer to this range.
 
         I will maintain this context for our conversation about this video segment.
         """
@@ -182,7 +192,11 @@ class GeminiHandler:
             start_idx = batch_idx * self.frame_batch_size
             end_idx = start_idx + self.frame_batch_size
             batch = self.processed_frames[start_idx:end_idx]
-            prompt_parts.extend([frame for frame, _ in batch])
+            # Add frames with their timestamps
+            for frame, timestamp in batch:
+                frame_info = f"Frame at {timestamp:.1f}s"
+                prompt_parts.append(frame_info)
+                prompt_parts.append(frame)
             print(f"Added batch {batch_idx + 1}/{total_batches}")
 
         if transcript:
@@ -204,16 +218,40 @@ class GeminiHandler:
         print("Chat context initialized and ready for queries")
         return response
 
-    async def generate_response(self, prompt: str, frames: List[Tuple[np.ndarray, float]], transcript: str = None) -> Tuple[Optional[str], Optional[Any]]:
+    async def generate_response(self,
+                           prompt: str,
+                           frames: List[Tuple[np.ndarray, float]],
+                           transcript: str = None,
+                           uploaded_image: str = None,
+                           uploaded_file: Dict = None) -> Tuple[Optional[str], Optional[Any]]:
         """Generate response using stored context"""
         try:
             # Ensure chat is initialized
             await self._initialize_chat_with_context(frames, transcript)
             
-            # Send query using existing context
-            print("Sending query using existing context...")
+            context_parts = [prompt]
+            
+            if uploaded_image:
+                try:
+                    image_bytes = base64.b64decode(uploaded_image)
+                    image = Image.open(io.BytesIO(image_bytes))
+                    context_parts.append(image)
+                    context_parts.insert(0, "Please consider both the video content and the uploaded image in your response.")
+                except Exception as e:
+                    print(f"Error processing uploaded image: {str(e)}")
+            
+            if uploaded_file:
+                try:
+                    if uploaded_file["type"].startswith('text/'):
+                        context_parts.insert(0,
+                            f"Consider the following uploaded text content:\n{uploaded_file['content']}\n"
+                            "Please include this information in your response along with the video content.")
+                except Exception as e:
+                    print(f"Error processing uploaded file: {str(e)}")
+            
+            print("Sending query with all context...")
             await self._wait_for_rate_limit()
-            response = self.chat.send_message(prompt)
+            response = self.chat.send_message(context_parts)
             return response.text, response
         except Exception as e:
             print(f"Error generating response: {str(e)}")
@@ -229,8 +267,16 @@ class GeminiHandler:
         3. Focus on important points and details
         4. Be detailed enough for learning but concise
 
-        Format as JSON array of objects with 'question' and 'answer' fields.
-        Generate 5-8 high-quality flashcards.
+        Provide output in the following strict JSON format:
+        [
+            {
+                "question": "Question text here",
+                "answer": "Answer text here"
+            },
+            ...
+        ]
+        
+        Generate 5-8 high-quality flashcards maintaining this exact JSON structure.
         """
         return await self._generate_learning_content(context, frames, transcript, "flashcards")
 
@@ -244,8 +290,17 @@ class GeminiHandler:
         3. Be clear and comprehensive
         4. Have carefully crafted distractors
 
-        Format as JSON array of objects with 'question', 'options', and 'correct_answer' fields.
-        Generate 5 challenging but fair questions.
+        Provide output in the following strict JSON format:
+        [
+            {
+                "question": "Question text here",
+                "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
+                "correct_answer": "Correct option text here"
+            },
+            ...
+        ]
+        
+        Generate 5 challenging but fair questions maintaining this exact JSON structure.
         """
         return await self._generate_learning_content(context, frames, transcript, "quiz")
 
@@ -262,22 +317,44 @@ class GeminiHandler:
             response = self.chat.send_message(context)
             content = response.text.strip()
             
-            # Extract JSON content
-            start_idx = content.find('[')
-            end_idx = content.rfind(']') + 1
-            if start_idx != -1 and end_idx != 0:
-                json_str = content[start_idx:end_idx]
-                return json.loads(json_str), response
-            else:
-                import re
-                json_pattern = r'\[\s*\{.*\}\s*\]'
-                match = re.search(json_pattern, content, re.DOTALL)
-                if match:
-                    json_str = match.group(0)
+            def clean_json_str(text):
+                """Clean and extract valid JSON array from text"""
+                # Find the first '[' and last ']'
+                start_idx = text.find('[')
+                end_idx = text.rfind(']') + 1
+                if start_idx == -1 or end_idx == 0:
+                    return None
+                
+                json_str = text[start_idx:end_idx]
+                # Remove any markdown backticks
+                json_str = json_str.replace('```json', '').replace('```', '')
+                # Try to clean up common JSON formatting issues
+                json_str = json_str.replace('\n', ' ').replace('\r', ' ')
+                json_str = ' '.join(json_str.split())  # Normalize whitespace
+                return json_str
+
+            # Try to extract and parse JSON
+            json_str = clean_json_str(content)
+            if json_str:
+                try:
                     return json.loads(json_str), response
-                else:
-                    print(f"Could not extract JSON from response: {content[:100]}...")
-                    return None, response
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON: {str(e)}")
+                    print(f"Problematic JSON string: {json_str[:200]}...")
+                    
+            # Fallback to regex pattern if needed
+            import re
+            json_pattern = r'\[\s*\{[^]]*\}\s*\]'
+            match = re.search(json_pattern, content, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+                try:
+                    return json.loads(json_str), response
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing regex match: {str(e)}")
+                    
+            print(f"Could not extract valid JSON from response: {content[:200]}...")
+            return None, response
         except Exception as e:
             print(f"Error generating {content_type}: {str(e)}")
             return None, None
