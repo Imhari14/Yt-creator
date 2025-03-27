@@ -23,42 +23,24 @@ st.set_page_config(
 # Load environment variables
 load_dotenv()
 
-# Sidebar for API Key Input
-with st.sidebar:
-    st.markdown("""
-        <div class="study-buddy-header">
-            <img src="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg" width="80">
-            <h1>📚 Study Buddy</h1>
-        </div>
-        """, unsafe_allow_html=True)
-
-    gemini_api_key = st.text_input("Enter Gemini API Key", type="password", key="gemini_api_key_input")
-    if gemini_api_key:
-        os.environ["GEMINI_API_KEY"] = gemini_api_key
-        st.success("API Key set successfully!")
-
 # Initialize handlers in session state for persistence
 if 'handlers' not in st.session_state:
     st.session_state.handlers = {
         'video_processor': VideoProcessor(),
         'transcript_handler': TranscriptHandler(),
+        'gemini_handler': GeminiHandler()
     }
-
-# Initialize GeminiHandler after setting API key
-if gemini_api_key:
-    st.session_state.handlers['gemini_handler'] = GeminiHandler()
 
 # Use handlers from session state
 video_processor = st.session_state.handlers['video_processor']
 transcript_handler = st.session_state.handlers['transcript_handler']
-gemini_handler = st.session_state.handlers.get('gemini_handler')
+gemini_handler = st.session_state.handlers['gemini_handler']
 
 # Re-initialize gemini_handler if last segment changed
 if ('last_segment' not in st.session_state or 
     st.session_state.get('current_segment') != st.session_state.get('last_segment')):
-    if gemini_api_key:
-        st.session_state.handlers['gemini_handler'] = GeminiHandler()
-        gemini_handler = st.session_state.handlers['gemini_handler']
+    st.session_state.handlers['gemini_handler'] = GeminiHandler()
+    gemini_handler = st.session_state.handlers['gemini_handler']
     if st.session_state.get('current_segment'):
         st.session_state.last_segment = st.session_state.current_segment
 
@@ -309,20 +291,32 @@ def display_token_info():
 
 # Sidebar for video URL input and learning tools
 with st.sidebar:
+    st.markdown("""
+        <div class="study-buddy-header">
+            <img src="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg" width="80">
+            <h1>📚 Study Buddy</h1>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Gemini API Key Input
+    gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
+    if gemini_api_key:
+        os.environ["GOOGLE_API_KEY"] = gemini_api_key
+        st.success("API Key set successfully!")
+
     # Video Input Section
     st.header("📹 Video Input")
     video_source = st.radio(
         "Select video source:",
         options=["YouTube", "Local MP4"],
-        index=0 if st.session_state.video_source == "youtube" or st.session_state.video_source is None else 1,
-        key="video_source_radio"
+        index=0 if st.session_state.video_source == "youtube" or st.session_state.video_source is None else 1
     )
 
     if video_source == "YouTube":
         st.session_state.video_source = "youtube"
-        video_url = st.text_input("Enter YouTube URL", key="youtube_url_input")
+        video_url = st.text_input("Enter YouTube URL")
         
-        if st.button("Load YouTube Video", use_container_width=True, key="load_youtube_button"):
+        if st.button("Load YouTube Video", use_container_width=True):
             with st.spinner("Processing YouTube video..."):
                 try:
                     video_info = video_processor.download_video(video_url)
@@ -351,11 +345,10 @@ with st.sidebar:
             transcript_options = list(st.session_state.available_transcripts.keys())
             selected_option = st.selectbox(
                 "Select language:",
-                options=transcript_options,
-                key="transcript_language_select"
+                options=transcript_options
             )
 
-            if st.button("Load Transcript", use_container_width=True, key="load_transcript_button"):
+            if st.button("Load Transcript", use_container_width=True):
                 try:
                     lang_code = st.session_state.available_transcripts[selected_option]['code']
                     video_id = transcript_handler.extract_video_id(video_url)
@@ -377,11 +370,11 @@ with st.sidebar:
                     
     else:  # Local MP4
         st.session_state.video_source = "local"
-        uploaded_video = st.file_uploader("Upload MP4 video file", type=["mp4"], key="local_video_uploader")
-        uploaded_transcript = st.file_uploader("Upload transcript text file", type=["txt"], key="local_transcript_uploader")
+        uploaded_video = st.file_uploader("Upload MP4 video file", type=["mp4"])
+        uploaded_transcript = st.file_uploader("Upload transcript text file", type=["txt"])
         
         if uploaded_video is not None and uploaded_transcript is not None:
-            if st.button("Load Local Video", use_container_width=True, key="load_local_button"):
+            if st.button("Load Local Video", use_container_width=True):
                 with st.spinner("Processing local video..."):
                     try:
                         temp_dir = tempfile.mkdtemp()
@@ -419,8 +412,7 @@ with st.sidebar:
         min_value=1,
         max_value=25,
         value=st.session_state.segment_interval,
-        step=1,
-        key="segment_interval_slider"
+        step=1
     )
     if segment_interval != st.session_state.segment_interval:
         st.session_state.segment_interval = segment_interval
@@ -438,11 +430,10 @@ with st.sidebar:
         selected_segment_idx = st.selectbox(
             "Select video segment:",
             range(len(segment_labels)),
-            format_func=lambda x: segment_labels[x],
-            key="segment_selectbox"
+            format_func=lambda x: segment_labels[x]
         )
 
-        if st.button("Load Segment", use_container_width=True, key="load_segment_button"):
+        if st.button("Load Segment", use_container_width=True):
             with st.spinner("Loading segment..."):
                 selected_segment = segments[selected_segment_idx]
                 if st.session_state.video_source == "youtube":
@@ -474,55 +465,54 @@ with st.sidebar:
                         selected_segment["end"]
                     )
                     st.session_state.transcript = segment_transcript
-
+                    
                 st.success(f"Loaded segment {selected_segment['label']}")
 
-# Learning Tools Section
-if st.session_state.current_frames:
-    st.header("📚 Learning Tools")
+        # Learning Tools
+        if st.session_state.current_frames:
+            st.header("📚 Learning Tools")
 
-    if st.button("Generate Flashcards", use_container_width=True):
-        with st.spinner("Generating flashcards..."):
-            try:
-                flashcards_response = asyncio.run(gemini_handler.generate_flashcards(
-                    st.session_state.transcript,
-                    st.session_state.current_frames
-                ))
+            if st.button("Generate Flashcards", use_container_width=True):
+                with st.spinner("Generating flashcards..."):
+                    try:
+                        flashcards_response = asyncio.run(gemini_handler.generate_flashcards(
+                            st.session_state.transcript,
+                            st.session_state.current_frames
+                        ))
+                        
+                        if flashcards_response:
+                            flashcards, response = flashcards_response
+                            st.session_state.flashcards = flashcards
+                            update_token_counts(response)
+                            st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
+                            st.success("Flashcards generated!")
+                        else:
+                            st.warning("Could not generate flashcards. Please try again.")
+                    except Exception as e:
+                        st.error(f"Error generating flashcards: {str(e)}")
 
-                if flashcards_response:
-                    flashcards, response = flashcards_response
-                    st.session_state.flashcards = flashcards
-                    update_token_counts(response)
-                    st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
-                    st.success("Flashcards generated!")
-                else:
-                    st.warning("Could not generate flashcards. Please try again.")
-            except Exception as e:
-                st.error(f"Error generating flashcards: {str(e)}")
-
-    if st.button("Generate Quiz", use_container_width=True):
-        with st.spinner("Generating quiz..."):
-            try:
-                quiz_response = asyncio.run(gemini_handler.generate_quiz(
-                    st.session_state.transcript,
-                    st.session_state.current_frames
-                ))
-
-                if quiz_response:
-                    quiz, response = quiz_response
-                    st.session_state.quiz = quiz
-                    st.session_state.quiz_score = 0
-                    st.session_state.user_answers = {}  # Reset user answers
-                    if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
-                        del st.session_state.shuffled_options
-                    update_token_counts(response)
-                    st.session_state.token_counts['last_operation'] = 'Generate Quiz'
-                    st.success("Quiz generated!")
-                else:
-                    st.warning("Could not generate quiz. Please try again.")
-            except Exception as e:
-                st.error(f"Error generating quiz: {str(e)}")
-
+            if st.button("Generate Quiz", use_container_width=True):
+                with st.spinner("Generating quiz..."):
+                    try:
+                        quiz_response = asyncio.run(gemini_handler.generate_quiz(
+                            st.session_state.transcript,
+                            st.session_state.current_frames
+                        ))
+                        
+                        if quiz_response:
+                            quiz, response = quiz_response
+                            st.session_state.quiz = quiz
+                            st.session_state.quiz_score = 0
+                            st.session_state.user_answers = {}  # Reset user answers
+                            if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
+                                del st.session_state.shuffled_options
+                            update_token_counts(response)
+                            st.session_state.token_counts['last_operation'] = 'Generate Quiz'
+                            st.success("Quiz generated!")
+                        else:
+                            st.warning("Could not generate quiz. Please try again.")
+                    except Exception as e:
+                        st.error(f"Error generating quiz: {str(e)}")
 # Main content area
 if st.session_state.video_info:
     st.header("📺 Video Player")
@@ -556,7 +546,7 @@ if st.session_state.video_info:
 
     # Quiz Column
     with col2:
-        st.header("🗂 Quiz")
+        st.header("📋 Quiz")
         if st.session_state.quiz:
             # Initialize shuffled options if not already done
             if 'shuffled_options' not in st.session_state:
@@ -596,9 +586,11 @@ if st.session_state.video_info:
                         st.write(f"Your answer: {user_answer}", help="Correct" if is_correct else "Incorrect")
                         if not is_correct:
                             st.write(f"Correct answer: {correct_answer}")
+        else:
+            st.info("Select a segment and generate a quiz to test your knowledge!")
 
     # Chat Section
-    st.header("💬 Chat with AI")
+    st.header("💭 Chat with AI")
     if st.session_state.current_segment:
         placeholder_text = f"Ask about the video content in segment {st.session_state.current_segment['label']}..."
     else:
@@ -630,7 +622,7 @@ if st.session_state.video_info:
                     st.session_state.current_frames,
                     st.session_state.transcript
                 ))
-
+                
                 if response_data:
                     response_text, raw_response = response_data
                     st.session_state.chat_history.append({
@@ -657,9 +649,3 @@ def cleanup():
     video_processor.cleanup()
     transcript_handler.cleanup()
     gemini_handler.cleanup()
-
-st.sidebar.markdown(" ")
-st.sidebar.markdown(" ")
-st.sidebar.markdown(" ")
-
-
