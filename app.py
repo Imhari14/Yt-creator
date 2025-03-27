@@ -482,13 +482,33 @@ with st.sidebar:
                             st.warning("Could not generate quiz. Please try again.")
                     except Exception as e:
                         st.error(f"Error generating quiz: {str(e)}")
-
 # Main content area
 if st.session_state.video_info:
+    # Get current date and time
+    from datetime import datetime
+    current_datetime = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # App branding and title with date/time and user login
+    st.markdown(f"""
+    <div style="text-align: center; margin-bottom: 20px;">
+        <h1 style="color: #4CAF50; margin-bottom: 0;">
+            📚 Study Buddy
+        </h1>
+        <p style="font-style: italic; color: #666;">Your AI-powered video learning assistant</p>
+        <div style="display: flex; justify-content: center; font-size: 0.85rem; color: #777; margin-top: 5px;">
+            <div style="margin-right: 20px;">
+                <strong>User:</strong> Imhari14
+            </div>
+            <div>
+                <strong>Date:</strong> {current_datetime} UTC
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     st.header("📺 Video Player")
     video_title = st.session_state.video_info['title']
     st.markdown(f"### {video_title}")
-
     if st.session_state.current_segment:
         segment = st.session_state.current_segment
         st.markdown(f"**Current Segment:** {segment['label']}")
@@ -700,3 +720,5 @@ display_token_info()
 # Cleanup temporary files when the app is closed
 def cleanup():
     video_processor.cleanup()
+    transcript_handler.cleanup()
+    gemini_handler.cleanup()
