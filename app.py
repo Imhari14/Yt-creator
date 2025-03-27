@@ -23,24 +23,42 @@ st.set_page_config(
 # Load environment variables
 load_dotenv()
 
+# Sidebar for API Key Input
+with st.sidebar:
+    st.markdown("""
+        <div class="study-buddy-header">
+            <img src="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg" width="80">
+            <h1>📚 Study Buddy</h1>
+        </div>
+        """, unsafe_allow_html=True)
+
+    gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
+    if gemini_api_key:
+        os.environ["GEMINI_API_KEY"] = gemini_api_key
+        st.success("API Key set successfully!")
+
 # Initialize handlers in session state for persistence
 if 'handlers' not in st.session_state:
     st.session_state.handlers = {
         'video_processor': VideoProcessor(),
         'transcript_handler': TranscriptHandler(),
-        'gemini_handler': GeminiHandler()
     }
+
+# Initialize GeminiHandler after setting API key
+if gemini_api_key:
+    st.session_state.handlers['gemini_handler'] = GeminiHandler()
 
 # Use handlers from session state
 video_processor = st.session_state.handlers['video_processor']
 transcript_handler = st.session_state.handlers['transcript_handler']
-gemini_handler = st.session_state.handlers['gemini_handler']
+gemini_handler = st.session_state.handlers.get('gemini_handler')
 
 # Re-initialize gemini_handler if last segment changed
 if ('last_segment' not in st.session_state or 
     st.session_state.get('current_segment') != st.session_state.get('last_segment')):
-    st.session_state.handlers['gemini_handler'] = GeminiHandler()
-    gemini_handler = st.session_state.handlers['gemini_handler']
+    if gemini_api_key:
+        st.session_state.handlers['gemini_handler'] = GeminiHandler()
+        gemini_handler = st.session_state.handlers['gemini_handler']
     if st.session_state.get('current_segment'):
         st.session_state.last_segment = st.session_state.current_segment
 
@@ -301,7 +319,7 @@ with st.sidebar:
     # Gemini API Key Input
     gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
     if gemini_api_key:
-        os.environ["GOOGLE_API_KEY"] = gemini_api_key
+        os.environ["GEMINI_API_KEY"] = gemini_api_key
         st.success("API Key set successfully!")
 
     # Video Input Section
@@ -465,54 +483,55 @@ with st.sidebar:
                         selected_segment["end"]
                     )
                     st.session_state.transcript = segment_transcript
-                    
+
                 st.success(f"Loaded segment {selected_segment['label']}")
 
-        # Learning Tools
-        if st.session_state.current_frames:
-            st.header("📚 Learning Tools")
+# Learning Tools Section
+if st.session_state.current_frames:
+    st.header("📚 Learning Tools")
 
-            if st.button("Generate Flashcards", use_container_width=True):
-                with st.spinner("Generating flashcards..."):
-                    try:
-                        flashcards_response = asyncio.run(gemini_handler.generate_flashcards(
-                            st.session_state.transcript,
-                            st.session_state.current_frames
-                        ))
-                        
-                        if flashcards_response:
-                            flashcards, response = flashcards_response
-                            st.session_state.flashcards = flashcards
-                            update_token_counts(response)
-                            st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
-                            st.success("Flashcards generated!")
-                        else:
-                            st.warning("Could not generate flashcards. Please try again.")
-                    except Exception as e:
-                        st.error(f"Error generating flashcards: {str(e)}")
+    if st.button("Generate Flashcards", use_container_width=True):
+        with st.spinner("Generating flashcards..."):
+            try:
+                flashcards_response = asyncio.run(gemini_handler.generate_flashcards(
+                    st.session_state.transcript,
+                    st.session_state.current_frames
+                ))
 
-            if st.button("Generate Quiz", use_container_width=True):
-                with st.spinner("Generating quiz..."):
-                    try:
-                        quiz_response = asyncio.run(gemini_handler.generate_quiz(
-                            st.session_state.transcript,
-                            st.session_state.current_frames
-                        ))
-                        
-                        if quiz_response:
-                            quiz, response = quiz_response
-                            st.session_state.quiz = quiz
-                            st.session_state.quiz_score = 0
-                            st.session_state.user_answers = {}  # Reset user answers
-                            if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
-                                del st.session_state.shuffled_options
-                            update_token_counts(response)
-                            st.session_state.token_counts['last_operation'] = 'Generate Quiz'
-                            st.success("Quiz generated!")
-                        else:
-                            st.warning("Could not generate quiz. Please try again.")
-                    except Exception as e:
-                        st.error(f"Error generating quiz: {str(e)}")
+                if flashcards_response:
+                    flashcards, response = flashcards_response
+                    st.session_state.flashcards = flashcards
+                    update_token_counts(response)
+                    st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
+                    st.success("Flashcards generated!")
+                else:
+                    st.warning("Could not generate flashcards. Please try again.")
+            except Exception as e:
+                st.error(f"Error generating flashcards: {str(e)}")
+
+    if st.button("Generate Quiz", use_container_width=True):
+        with st.spinner("Generating quiz..."):
+            try:
+                quiz_response = asyncio.run(gemini_handler.generate_quiz(
+                    st.session_state.transcript,
+                    st.session_state.current_frames
+                ))
+
+                if quiz_response:
+                    quiz, response = quiz_response
+                    st.session_state.quiz = quiz
+                    st.session_state.quiz_score = 0
+                    st.session_state.user_answers = {}  # Reset user answers
+                    if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
+                        del st.session_state.shuffled_options
+                    update_token_counts(response)
+                    st.session_state.token_counts['last_operation'] = 'Generate Quiz'
+                    st.success("Quiz generated!")
+                else:
+                    st.warning("Could not generate quiz. Please try again.")
+            except Exception as e:
+                st.error(f"Error generating quiz: {str(e)}")
+
 # Main content area
 if st.session_state.video_info:
     st.header("📺 Video Player")
