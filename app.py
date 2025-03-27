@@ -669,5 +669,3 @@ st.sidebar.markdown(" ")
 st.sidebar.markdown(" ")
 st.sidebar.markdown(" ")
 
-# Run cleanup when the script stops
-st.on_event("shutdown", cleanup)
