@@ -2,10 +2,11 @@
 
 > Turn any YouTube video into your personal tutor! 🚀
 
+![Study Buddy Banner](https://user-images.githubusercontent.com/your-username/study-buddy-banner.png)
 
 ## ✨ What's This?
 
-Study Buddy transforms YouTube videos into interactive study sessions! 
+Study Buddy is your smart learning assistant that transforms YouTube videos into interactive study sessions! Whether you're cramming for exams or just curious about a topic, we've got your back! 
 
 ### 🎯 Features
 
@@ -16,6 +17,8 @@ Study Buddy transforms YouTube videos into interactive study sessions!
 - 📝 **Flashcards**: Auto-generated study materials
 - 📋 **Quizzes**: Test your knowledge
 - 🌍 **Multi-Language**: Learn in your preferred language
+
+> **Note**: Experience up to 5 times lower token counts in the context window compared to Google AI Studio, leading to a significant reduction in computational overhead and minimized hallucinations due to efficient token count management.
 
 ## 🚀 Getting Started
 
@@ -92,6 +95,7 @@ ai_response = "Gradient descent is like going down a hill to find the lowest poi
 
 1. **Issues & Features**
 ```bash
+# Report a bug
 1. Go to "Issues"
 2. Click "New Issue"
 3. Use the bug report template
@@ -99,6 +103,7 @@ ai_response = "Gradient descent is like going down a hill to find the lowest poi
 
 2. **Pull Requests**
 ```bash
+# Follow these steps to submit a PR
 1. Fork the repo
 2. Create your feature branch
 git checkout -b feature/AmazingFeature
