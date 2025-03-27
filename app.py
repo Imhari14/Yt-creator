@@ -467,28 +467,27 @@ with st.sidebar:
                 st.session_state.current_segment = selected_segment
                 
                 if st.session_state.video_source == "youtube" and st.session_state.transcript:
-                                    session_state.transcript = transcript_handler.get_transcript_for_chunk(
-                    st.session_state.transcript,
-                    selected_segment["start"],
-                    selected_segment["end"]
-                )
-            elif st.session_state.video_source == "local" and st.session_state.transcript_text:
-                segment_transcript = get_transcript_text_for_segment(
-                    st.session_state.transcript_text,
-                    selected_segment["start"],
-                    selected_segment["end"]
-                )
-                st.session_state.transcript = segment_transcript
+                    st.session_state.transcript = transcript_handler.get_transcript_for_chunk(
+                        st.session_state.transcript,
+                        selected_segment["start"],
+                        selected_segment["end"]
+                    )
+                elif st.session_state.video_source == "local" and st.session_state.transcript_text:
+                    segment_transcript = get_transcript_text_for_segment(
+                        st.session_state.transcript_text,
+                        selected_segment["start"],
+                        selected_segment["end"]
+                    )
+                    st.session_state.transcript = segment_transcript
 
-            st.success(f"Loaded segment {selected_segment['label']}")
+                st.success(f"Loaded segment {selected_segment['label']}")
 
-        # Learning Tools
-        if st.session_state.current_frames:
-            st.header("📚 Learning Tools")
+            # Learning Tools
+            if st.session_state.current_frames:
+                st.header("📚 Learning Tools")
 
-            if st.button("Generate Flashcards", use_container_width=True):
-                with st.spinner("Generating flashcards..."):
-                    try:
+                if st.button("Generate Flashcards", use_container_width=True):
+                                        try:
                         flashcards_response = asyncio.run(gemini_handler.generate_flashcards(
                             st.session_state.transcript,
                             st.session_state.current_frames
@@ -505,28 +504,28 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"Error generating flashcards: {str(e)}")
 
-            if st.button("Generate Quiz", use_container_width=True):
-                with st.spinner("Generating quiz..."):
-                    try:
-                        quiz_response = asyncio.run(gemini_handler.generate_quiz(
-                            st.session_state.transcript,
-                            st.session_state.current_frames
-                        ))
+                if st.button("Generate Quiz", use_container_width=True):
+                    with st.spinner("Generating quiz..."):
+                        try:
+                            quiz_response = asyncio.run(gemini_handler.generate_quiz(
+                                st.session_state.transcript,
+                                st.session_state.current_frames
+                            ))
 
-                        if quiz_response:
-                            quiz, response = quiz_response
-                            st.session_state.quiz = quiz
-                            st.session_state.quiz_score = 0
-                            st.session_state.user_answers = {}  # Reset user answers
-                            if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
-                                del st.session_state.shuffled_options
-                            update_token_counts(response)
-                            st.session_state.token_counts['last_operation'] = 'Generate Quiz'
-                            st.success("Quiz generated!")
-                        else:
-                            st.warning("Could not generate quiz. Please try again.")
-                    except Exception as e:
-                        st.error(f"Error generating quiz: {str(e)}")
+                            if quiz_response:
+                                quiz, response = quiz_response
+                                st.session_state.quiz = quiz
+                                st.session_state.quiz_score = 0
+                                st.session_state.user_answers = {}  # Reset user answers
+                                if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
+                                    del st.session_state.shuffled_options
+                                update_token_counts(response)
+                                st.session_state.token_counts['last_operation'] = 'Generate Quiz'
+                                st.success("Quiz generated!")
+                            else:
+                                st.warning("Could not generate quiz. Please try again.")
+                        except Exception as e:
+                            st.error(f"Error generating quiz: {str(e)}")
 
 # Main content area
 if st.session_state.video_info:
@@ -662,4 +661,3 @@ def cleanup():
     video_processor.cleanup()
     transcript_handler.cleanup()
     gemini_handler.cleanup()
-```
