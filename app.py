@@ -23,6 +23,20 @@ st.set_page_config(
 # Load environment variables
 load_dotenv()
 
+# Sidebar for API Key Input
+with st.sidebar:
+    st.markdown("""
+        <div class="study-buddy-header">
+            <img src="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg" width="80">
+            <h1>📚 Study Buddy</h1>
+        </div>
+        """, unsafe_allow_html=True)
+
+    gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
+    if gemini_api_key:
+        os.environ["GEMINI_API_KEY"] = gemini_api_key
+        st.success("API Key set successfully!")
+
 # Initialize handlers in session state for persistence
 if 'handlers' not in st.session_state:
     st.session_state.handlers = {
@@ -453,20 +467,20 @@ with st.sidebar:
                 st.session_state.current_segment = selected_segment
                 
                 if st.session_state.video_source == "youtube" and st.session_state.transcript:
-                    st.session_state.transcript = transcript_handler.get_transcript_for_chunk(
-                        st.session_state.transcript,
-                        selected_segment["start"],
-                        selected_segment["end"]
-                    )
-                elif st.session_state.video_source == "local" and st.session_state.transcript_text:
-                    segment_transcript = get_transcript_text_for_segment(
-                        st.session_state.transcript_text,
-                        selected_segment["start"],
-                        selected_segment["end"]
-                    )
-                    st.session_state.transcript = segment_transcript
-                    
-                st.success(f"Loaded segment {selected_segment['label']}")
+                                    session_state.transcript = transcript_handler.get_transcript_for_chunk(
+                    st.session_state.transcript,
+                    selected_segment["start"],
+                    selected_segment["end"]
+                )
+            elif st.session_state.video_source == "local" and st.session_state.transcript_text:
+                segment_transcript = get_transcript_text_for_segment(
+                    st.session_state.transcript_text,
+                    selected_segment["start"],
+                    selected_segment["end"]
+                )
+                st.session_state.transcript = segment_transcript
+
+            st.success(f"Loaded segment {selected_segment['label']}")
 
         # Learning Tools
         if st.session_state.current_frames:
@@ -479,7 +493,7 @@ with st.sidebar:
                             st.session_state.transcript,
                             st.session_state.current_frames
                         ))
-                        
+
                         if flashcards_response:
                             flashcards, response = flashcards_response
                             st.session_state.flashcards = flashcards
@@ -498,7 +512,7 @@ with st.sidebar:
                             st.session_state.transcript,
                             st.session_state.current_frames
                         ))
-                        
+
                         if quiz_response:
                             quiz, response = quiz_response
                             st.session_state.quiz = quiz
@@ -513,6 +527,7 @@ with st.sidebar:
                             st.warning("Could not generate quiz. Please try again.")
                     except Exception as e:
                         st.error(f"Error generating quiz: {str(e)}")
+
 # Main content area
 if st.session_state.video_info:
     st.header("📺 Video Player")
@@ -546,7 +561,7 @@ if st.session_state.video_info:
 
     # Quiz Column
     with col2:
-        st.header("📋 Quiz")
+        st.header("🗂 Quiz")
         if st.session_state.quiz:
             # Initialize shuffled options if not already done
             if 'shuffled_options' not in st.session_state:
@@ -586,11 +601,9 @@ if st.session_state.video_info:
                         st.write(f"Your answer: {user_answer}", help="Correct" if is_correct else "Incorrect")
                         if not is_correct:
                             st.write(f"Correct answer: {correct_answer}")
-        else:
-            st.info("Select a segment and generate a quiz to test your knowledge!")
 
     # Chat Section
-    st.header("💭 Chat with AI")
+    st.header("💬 Chat with AI")
     if st.session_state.current_segment:
         placeholder_text = f"Ask about the video content in segment {st.session_state.current_segment['label']}..."
     else:
@@ -622,7 +635,7 @@ if st.session_state.video_info:
                     st.session_state.current_frames,
                     st.session_state.transcript
                 ))
-                
+
                 if response_data:
                     response_text, raw_response = response_data
                     st.session_state.chat_history.append({
@@ -649,3 +662,4 @@ def cleanup():
     video_processor.cleanup()
     transcript_handler.cleanup()
     gemini_handler.cleanup()
+```
