@@ -309,13 +309,6 @@ def display_token_info():
 
 # Sidebar for video URL input and learning tools
 with st.sidebar:
-    st.markdown("""
-        <div class="study-buddy-header">
-            <img src="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg" width="80">
-            <h1>📚 Study Buddy</h1>
-        </div>
-        """, unsafe_allow_html=True)
-
     # Video Input Section
     st.header("📹 Video Input")
     video_source = st.radio(
@@ -669,3 +662,5 @@ st.sidebar.markdown(" ")
 st.sidebar.markdown(" ")
 st.sidebar.markdown(" ")
 
+# Run cleanup when the script stops
+st.on_event("shutdown", cleanup)
