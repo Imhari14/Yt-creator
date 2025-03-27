@@ -209,7 +209,8 @@ class GeminiHandler:
         
         # Send initial context
         print("Sending initial context to Gemini...")
-        st.session_state.token_counts['last_operation'] = 'Initialize Context'
+        if 'token_counts' in st.session_state:
+            st.session_state.token_counts['last_operation'] = 'Initialize Context'
         response = self.chat.send_message(prompt_parts)
         
         # Update state
@@ -227,7 +228,11 @@ class GeminiHandler:
         """Generate response using stored context"""
         try:
             # Ensure chat is initialized
-            await self._initialize_chat_with_context(frames, transcript)
+            response = await self._initialize_chat_with_context(frames, transcript)
+            
+            # If initialization just happened, update token counts
+            if response and 'token_counts' in st.session_state:
+                self._update_initial_context_tokens(response)
             
             context_parts = [prompt]
             
@@ -251,6 +256,10 @@ class GeminiHandler:
             
             print("Sending query with all context...")
             await self._wait_for_rate_limit()
+            
+            if 'token_counts' in st.session_state:
+                st.session_state.token_counts['last_operation'] = 'Chat Response'
+                
             response = self.chat.send_message(context_parts)
             return response.text, response
         except Exception as e:
@@ -278,6 +287,10 @@ class GeminiHandler:
         
         Generate 5-8 high-quality flashcards maintaining this exact JSON structure.
         """
+        
+        if 'token_counts' in st.session_state:
+            st.session_state.token_counts['last_operation'] = 'Generate Flashcards'
+            
         return await self._generate_learning_content(context, frames, transcript, "flashcards")
 
     async def generate_quiz(self, transcript: str = None, frames: List[Tuple[np.ndarray, float]] = None) -> Tuple[Optional[List[Dict]], Optional[Any]]:
@@ -302,6 +315,10 @@ class GeminiHandler:
         
         Generate 5 challenging but fair questions maintaining this exact JSON structure.
         """
+        
+        if 'token_counts' in st.session_state:
+            st.session_state.token_counts['last_operation'] = 'Generate Quiz'
+            
         return await self._generate_learning_content(context, frames, transcript, "quiz")
 
     async def _generate_learning_content(self, context: str, frames: List[Tuple[np.ndarray, float]], 
@@ -309,7 +326,11 @@ class GeminiHandler:
         """Generate learning content using stored context"""
         try:
             # Ensure chat is initialized
-            await self._initialize_chat_with_context(frames, transcript)
+            response = await self._initialize_chat_with_context(frames, transcript)
+            
+            # If initialization just happened, update token counts
+            if response and 'token_counts' in st.session_state:
+                self._update_initial_context_tokens(response)
             
             # Generate content using existing context
             print(f"Generating {content_type} using existing context...")
@@ -358,6 +379,38 @@ class GeminiHandler:
         except Exception as e:
             print(f"Error generating {content_type}: {str(e)}")
             return None, None
+            
+    def _update_initial_context_tokens(self, response):
+        """Update token count information for initial context"""
+        if hasattr(response, 'usage_metadata'):
+            metadata = response.usage_metadata
+            
+            # Update initial context tokens
+            st.session_state.token_counts['initial_context'] = {
+                'prompt_tokens': metadata.prompt_token_count,
+                'output_tokens': metadata.candidates_token_count,
+                'total_tokens': metadata.total_token_count
+            }
+            
+            # Reset query tokens when context changes
+            st.session_state.token_counts['query_tokens'] = {
+                'prompt_tokens': 0,
+                'output_tokens': 0,
+                'total_tokens': 0
+            }
+            
+            # Update cumulative totals
+            st.session_state.token_counts['prompt_token_count'] = metadata.prompt_token_count
+            st.session_state.token_counts['candidates_token_count'] = metadata.candidates_token_count
+            st.session_state.token_counts['total_token_count'] = metadata.total_token_count
+            
+            # Store current operation metrics
+            st.session_state.token_counts['current_operation'] = {
+                'name': st.session_state.token_counts['last_operation'],
+                'prompt_tokens': metadata.prompt_token_count,
+                'output_tokens': metadata.candidates_token_count,
+                'total_tokens': metadata.total_token_count
+            }
 
     def get_model_info(self) -> Optional[Any]:
         """Get model information including token limits"""
@@ -368,3 +421,11 @@ class GeminiHandler:
         except Exception as e:
             print(f"Error getting model info: {str(e)}")
             return None
+            
+    def cleanup(self):
+        """Clean up resources when app is closed"""
+        # Release any resources if needed
+        self.chat = None
+        self.processed_frames = None
+        self.is_initialized = False
+        print("GeminiHandler resources cleaned up")
