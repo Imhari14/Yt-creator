@@ -8,3 +8,4 @@ Pillow
 fpdf2
 markdown
 markdownify
+youtube_transcript_api
