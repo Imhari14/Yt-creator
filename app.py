@@ -14,7 +14,7 @@ import tempfile
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Video Learning Assistant",
+    page_title="Study Buddy",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -76,6 +76,25 @@ st.markdown("""
     .token-simple-value {
         font-weight: bold;
         color: #4CAF50;
+    }
+    .study-buddy-header {
+        text-align: center;
+        padding: 1rem;
+        background: linear-gradient(135deg, #4CAF50, #2196F3);
+        border-radius: 10px;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .study-buddy-header h1 {
+        color: white;
+        margin: 0;
+        font-size: 2rem;
+        font-weight: 700;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+    .study-buddy-header img {
+        margin-bottom: 0.5rem;
+        filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.2));
     }
 </style>
 """, unsafe_allow_html=True)
@@ -272,8 +291,18 @@ def display_token_info():
 
 # Sidebar for video URL input and learning tools
 with st.sidebar:
-    st.image("https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg")
-    st.title("Learning Tools")
+    st.markdown("""
+        <div class="study-buddy-header">
+            <img src="https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/school/default/48px.svg" width="80">
+            <h1>📚 Study Buddy</h1>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Gemini API Key Input
+    gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
+    if gemini_api_key:
+        os.environ["GOOGLE_API_KEY"] = gemini_api_key
+        st.success("API Key set successfully!")
 
     # Video Input Section
     st.header("📹 Video Input")
@@ -475,6 +504,8 @@ with st.sidebar:
                             st.session_state.quiz = quiz
                             st.session_state.quiz_score = 0
                             st.session_state.user_answers = {}  # Reset user answers
+                            if 'shuffled_options' in st.session_state:  # Reset shuffled options for new quiz
+                                del st.session_state.shuffled_options
                             update_token_counts(response)
                             st.session_state.token_counts['last_operation'] = 'Generate Quiz'
                             st.success("Quiz generated!")
@@ -484,31 +515,10 @@ with st.sidebar:
                         st.error(f"Error generating quiz: {str(e)}")
 # Main content area
 if st.session_state.video_info:
-    # Get current date and time
-    from datetime import datetime
-    current_datetime = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # App branding and title with date/time and user login
-    st.markdown(f"""
-    <div style="text-align: center; margin-bottom: 20px;">
-        <h1 style="color: #4CAF50; margin-bottom: 0;">
-            📚 Study Buddy
-        </h1>
-        <p style="font-style: italic; color: #666;">Your AI-powered video learning assistant</p>
-        <div style="display: flex; justify-content: center; font-size: 0.85rem; color: #777; margin-top: 5px;">
-            <div style="margin-right: 20px;">
-                <strong>User:</strong> Imhari14
-            </div>
-            <div>
-                <strong>Date:</strong> {current_datetime} UTC
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
     st.header("📺 Video Player")
     video_title = st.session_state.video_info['title']
     st.markdown(f"### {video_title}")
+
     if st.session_state.current_segment:
         segment = st.session_state.current_segment
         st.markdown(f"**Current Segment:** {segment['label']}")
@@ -538,13 +548,20 @@ if st.session_state.video_info:
     with col2:
         st.header("📋 Quiz")
         if st.session_state.quiz:
+            # Initialize shuffled options if not already done
+            if 'shuffled_options' not in st.session_state:
+                st.session_state.shuffled_options = {}
+                for i, question in enumerate(st.session_state.quiz):
+                    options = question['options'].copy()
+                    random.shuffle(options)
+                    st.session_state.shuffled_options[i] = options
+
+            # Display questions with consistent shuffled options
             for i, question in enumerate(st.session_state.quiz):
                 st.subheader(f"Q{i+1}: {question['question']}")
-                options = question['options']
-                random.shuffle(options)
                 user_answer = st.radio(
                     "Select your answer:",
-                    options,
+                    st.session_state.shuffled_options[i],
                     key=f"quiz_{i}"
                 )
 
@@ -579,15 +596,8 @@ if st.session_state.video_info:
     else:
         placeholder_text = "Please select a video segment first..."
 
-    # Create columns for the chat input area
-    input_col1, input_col2 = st.columns([4, 1])
-
-    with input_col1:
-        user_input = st.text_area("Your message:", key="chat_input", height=100)
-
-    with input_col2:
-        uploaded_image = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'], key="chat_image")
-        uploaded_file = st.file_uploader("Upload File", type=['pdf', 'txt', 'doc', 'docx'], key="chat_file")
+    # Chat input
+    user_input = st.text_area("Your message:", placeholder=placeholder_text, key="chat_input", height=100)
 
     # Add a submit button
     if st.button("Send", use_container_width=True):
@@ -595,82 +605,22 @@ if st.session_state.video_info:
             st.warning("Please select a video segment first!")
             st.stop()
 
-        if not user_input and not uploaded_image and not uploaded_file:
-            st.warning("Please enter a message or upload a file!")
+        if not user_input:
+            st.warning("Please enter a message!")
             st.stop()
-
-        # Prepare the message content
-        message_content = {
-            "text": user_input,
-            "image": None,
-            "file": None
-        }
-
-        # Handle image upload
-        if uploaded_image:
-            try:
-                # Read and process the image
-                image = Image.open(uploaded_image)
-                # Convert to RGB if necessary
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                # Resize if too large (e.g., max 800px width)
-                max_width = 800
-                if image.width > max_width:
-                    ratio = max_width / image.width
-                    new_size = (max_width, int(image.height * ratio))
-                    image = image.resize(new_size, Image.Resampling.LANCZOS)
-                # Convert to base64 for storage
-                buffered = io.BytesIO()
-                image.save(buffered, format="JPEG")
-                img_str = base64.b64encode(buffered.getvalue()).decode()
-                message_content["image"] = img_str
-            except Exception as e:
-                st.error(f"Error processing image: {str(e)}")
-                st.stop()
-
-        # Handle file upload
-        if uploaded_file:
-            try:
-                # Read and store file content
-                file_content = uploaded_file.read()
-                if uploaded_file.type.startswith('text/'):
-                    # For text files, store the content as string
-                    file_content = file_content.decode('utf-8')
-                else:
-                    # For binary files, store as base64
-                    file_content = base64.b64encode(file_content).decode()
-                message_content["file"] = {
-                    "name": uploaded_file.name,
-                    "type": uploaded_file.type,
-                    "content": file_content
-                }
-            except Exception as e:
-                st.error(f"Error processing file: {str(e)}")
-                st.stop()
 
         # Add message to chat history
         st.session_state.chat_history.append({
             "role": "user",
-            "content": message_content
+            "content": {"text": user_input}
         })
 
         with st.spinner("Analyzing content..."):
             try:
-                # Prepare the context with additional content
-                context = {
-                    "frames": st.session_state.current_frames,
-                    "transcript": st.session_state.transcript,
-                    "uploaded_image": message_content["image"],
-                    "uploaded_file": message_content["file"]
-                }
-
                 response_data = asyncio.run(gemini_handler.generate_response(
                     user_input,
-                    context["frames"],
-                    context["transcript"],
-                    uploaded_image=context["uploaded_image"],
-                    uploaded_file=context["uploaded_file"]
+                    st.session_state.current_frames,
+                    st.session_state.transcript
                 ))
                 
                 if response_data:
@@ -686,33 +636,10 @@ if st.session_state.video_info:
             except Exception as e:
                 st.error(f"Error generating response: {str(e)}")
 
-    # Display chat history with support for images and files
+    # Display chat history
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
-            if isinstance(message["content"], dict):
-                # Display text content
-                if "text" in message["content"] and message["content"]["text"]:
-                    st.write(message["content"]["text"])
-
-                # Display image if present
-                if "image" in message["content"] and message["content"]["image"]:
-                    try:
-                        image_bytes = base64.b64decode(message["content"]["image"])
-                        st.image(image_bytes, caption="Uploaded Image", use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error displaying image: {str(e)}")
-
-                # Display file if present
-                if "file" in message["content"] and message["content"]["file"]:
-                    file_info = message["content"]["file"]
-                    if file_info["type"].startswith('text/'):
-                        with st.expander(f"📎 {file_info['name']}"):
-                            st.text(file_info["content"])
-                    else:
-                        st.write(f"📎 Uploaded file: {file_info['name']}")
-            else:
-                # Handle legacy message format
-                st.write(message["content"])
+            st.write(message["content"]["text"])
 
 # Display token info in the corner
 display_token_info()
