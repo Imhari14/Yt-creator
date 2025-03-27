@@ -32,7 +32,7 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-    gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
+    gemini_api_key = st.text_input("Enter Gemini API Key", type="password", key="gemini_api_key_input")
     if gemini_api_key:
         os.environ["GEMINI_API_KEY"] = gemini_api_key
         st.success("API Key set successfully!")
@@ -316,25 +316,20 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-    # Gemini API Key Input
-    gemini_api_key = st.text_input("Enter Gemini API Key", type="password")
-    if gemini_api_key:
-        os.environ["GEMINI_API_KEY"] = gemini_api_key
-        st.success("API Key set successfully!")
-
     # Video Input Section
     st.header("📹 Video Input")
     video_source = st.radio(
         "Select video source:",
         options=["YouTube", "Local MP4"],
-        index=0 if st.session_state.video_source == "youtube" or st.session_state.video_source is None else 1
+        index=0 if st.session_state.video_source == "youtube" or st.session_state.video_source is None else 1,
+        key="video_source_radio"
     )
 
     if video_source == "YouTube":
         st.session_state.video_source = "youtube"
-        video_url = st.text_input("Enter YouTube URL")
+        video_url = st.text_input("Enter YouTube URL", key="youtube_url_input")
         
-        if st.button("Load YouTube Video", use_container_width=True):
+        if st.button("Load YouTube Video", use_container_width=True, key="load_youtube_button"):
             with st.spinner("Processing YouTube video..."):
                 try:
                     video_info = video_processor.download_video(video_url)
@@ -363,10 +358,11 @@ with st.sidebar:
             transcript_options = list(st.session_state.available_transcripts.keys())
             selected_option = st.selectbox(
                 "Select language:",
-                options=transcript_options
+                options=transcript_options,
+                key="transcript_language_select"
             )
 
-            if st.button("Load Transcript", use_container_width=True):
+            if st.button("Load Transcript", use_container_width=True, key="load_transcript_button"):
                 try:
                     lang_code = st.session_state.available_transcripts[selected_option]['code']
                     video_id = transcript_handler.extract_video_id(video_url)
@@ -388,11 +384,11 @@ with st.sidebar:
                     
     else:  # Local MP4
         st.session_state.video_source = "local"
-        uploaded_video = st.file_uploader("Upload MP4 video file", type=["mp4"])
-        uploaded_transcript = st.file_uploader("Upload transcript text file", type=["txt"])
+        uploaded_video = st.file_uploader("Upload MP4 video file", type=["mp4"], key="local_video_uploader")
+        uploaded_transcript = st.file_uploader("Upload transcript text file", type=["txt"], key="local_transcript_uploader")
         
         if uploaded_video is not None and uploaded_transcript is not None:
-            if st.button("Load Local Video", use_container_width=True):
+            if st.button("Load Local Video", use_container_width=True, key="load_local_button"):
                 with st.spinner("Processing local video..."):
                     try:
                         temp_dir = tempfile.mkdtemp()
@@ -430,7 +426,8 @@ with st.sidebar:
         min_value=1,
         max_value=25,
         value=st.session_state.segment_interval,
-        step=1
+        step=1,
+        key="segment_interval_slider"
     )
     if segment_interval != st.session_state.segment_interval:
         st.session_state.segment_interval = segment_interval
@@ -448,10 +445,11 @@ with st.sidebar:
         selected_segment_idx = st.selectbox(
             "Select video segment:",
             range(len(segment_labels)),
-            format_func=lambda x: segment_labels[x]
+            format_func=lambda x: segment_labels[x],
+            key="segment_selectbox"
         )
 
-        if st.button("Load Segment", use_container_width=True):
+        if st.button("Load Segment", use_container_width=True, key="load_segment_button"):
             with st.spinner("Loading segment..."):
                 selected_segment = segments[selected_segment_idx]
                 if st.session_state.video_source == "youtube":
