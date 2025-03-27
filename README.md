@@ -2,7 +2,7 @@
 
 > Turn any YouTube video into your personal tutor! 🚀
 
-![Study Buddy Banner](https://user-images.githubusercontent.com/your-username/study-buddy-banner.png)
+
 
 ## ✨ What's This?
 
